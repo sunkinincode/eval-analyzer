@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบวิเคราะห์ผลประเมินโครงการ</title>
+<meta name="description" content="วิเคราะห์ผลประเมินโครงการจากไฟล์ .xlsx (Google Forms) — ค่าเฉลี่ย S.D. ร้อยละ แผนภูมิ SDGs พร้อมรายงานราชการคัดลอกลง Word ได้ทันที ประมวลผลในเครื่อง ข้อมูลไม่ออกสู่อินเทอร์เน็ต">
+<script>/* ตั้งธีมก่อนวาดหน้า กันจอกะพริบ */try{var t=localStorage.getItem("evalTheme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="styles.css?v=6">
+<script src="vendor/xlsx.full.min.js" defer></script>
+<script src="vendor/chart.umd.min.js" defer></script>
+<script src="vendor/lucide.min.js" defer></script>
+</head>
+<body>
+
+<div class="app-shell">
+
+<aside class="sidebar">
+  <div class="side-logo"><span class="logo-mark"><i data-lucide="chart-column"></i></span><div><b>ประเมินผลโครงการ</b><span>สโมสรนักศึกษา</span></div></div>
+
+  <nav class="side-nav">
+    <div class="side-group">
+      <div class="side-label">ภาพรวม</div>
+      <button class="side-btn tab-btn active" data-tab="dashboard"><i data-lucide="layout-dashboard"></i> แดชบอร์ด</button>
+      <button class="side-btn tab-btn" data-tab="sections"><i data-lucide="chart-column"></i> ผลรายด้าน</button>
+      <button class="side-btn tab-btn" data-tab="sdg"><i data-lucide="globe"></i> SDGs</button>
+    </div>
+    <div class="side-group">
+      <div class="side-label">ข้อมูล</div>
+      <button class="side-btn tab-btn" data-tab="demo"><i data-lucide="users"></i> ข้อมูลผู้ตอบ</button>
+      <button class="side-btn tab-btn" data-tab="text"><i data-lucide="message-square"></i> ข้อเสนอแนะ</button>
+      <button class="side-btn tab-btn" data-tab="columns"><i data-lucide="sliders-horizontal"></i> ตั้งค่าคอลัมน์</button>
+    </div>
+    <div class="side-group">
+      <div class="side-label">เอกสาร</div>
+      <button class="side-btn tab-btn" data-tab="report"><i data-lucide="file-text"></i> รายงานราชการ</button>
+    </div>
+    <div class="side-group">
+      <div class="side-label">ระบบ</div>
+      <button class="side-btn tab-btn" data-tab="history"><i data-lucide="history"></i> ประวัติ</button>
+    </div>
+  </nav>
+
+  <div class="side-bottom">
+    <button class="btn primary" id="btnChangeFile"><i data-lucide="upload"></i> อัปโหลดไฟล์</button>
+    <div class="side-user">
+      <span id="userChip" class="user-chip hidden"></span>
+      <button class="btn small" id="btnTheme" title="สลับธีม"><i data-lucide="monitor"></i></button>
+      <button class="btn small" id="btnSwitchUser" title="เปลี่ยนผู้ใช้">เปลี่ยน</button>
+    </div>
+  </div>
+</aside>
+
+<div class="main-col">
+<header class="topbar">
+  <div>
+    <h1 id="greeting">สวัสดีครับ</h1>
+    <p class="sub">วิเคราะห์ผลประเมินโครงการ · x̄ · S.D. · ร้อยละ · แผนภูมิ · รายงานราชการ</p>
+  </div>
+  <div id="fileInfo" class="file-info hidden">
+    <span class="chip-file" id="fileName"></span>
+    <span id="fileMeta"></span>
+    <select id="sheetPicker" class="coltype hidden"></select>
+  </div>
+</header>
+
+<main>
+  <!-- หน้าเริ่มต้น -->
+  <section id="emptyState">
+    <div class="dropzone" id="dropzone">
+      <div class="dz-icon"><i data-lucide="file-up"></i></div>
+      <h2>ลากไฟล์ .xlsx มาวางที่นี่ หรือคลิกเพื่อเลือกไฟล์</h2>
+      <p>รองรับไฟล์คำตอบที่ดาวน์โหลดจาก Google Forms / Google Sheets (.xlsx, .csv)</p>
+      <div class="dz-actions">
+        <button class="btn primary" id="btnBrowse" type="button">เลือกไฟล์จากเครื่อง</button>
+        <button class="btn" id="btnDemo" type="button">ลองใช้ด้วยข้อมูลตัวอย่าง</button>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none">
+    </div>
+    <div class="hint-cards">
+      <div class="hint-card"><b><i data-lucide="lock"></i> ข้อมูลไม่ออกจากเครื่อง</b>ทุกอย่างประมวลผลในเบราว์เซอร์ของคุณ ไม่มีการอัปโหลดขึ้นเซิร์ฟเวอร์ สอดคล้องแนวทาง PDPA</div>
+      <div class="hint-card"><b><i data-lucide="bot"></i> ตรวจชนิดคำถามอัตโนมัติ</b>แยกคำถามคะแนน 1–5, ความสอดคล้อง SDGs, ข้อมูลทั่วไปของผู้ตอบ และข้อเสนอแนะให้เอง ปรับแก้ได้ที่แท็บ "ตั้งค่าคอลัมน์"</div>
+      <div class="hint-card"><b><i data-lucide="file-text"></i> พร้อมใส่เล่มรายงาน</b>สร้างตาราง x̄ / S.D. / ระดับผล พร้อมคำบรรยายใต้ตารางตามแบบเอกสารราชการ (TH Sarabun 16pt) คัดลอกไปวางใน Word ได้ทันที</div>
+      <div class="hint-card"><b><i data-lucide="history"></i> ประวัติย้อนหลัง 15 วัน</b>ทุกไฟล์ที่วิเคราะห์จะถูกบันทึกไว้ในเครื่องนี้ เปิดดูซ้ำได้โดยไม่ต้องอัปโหลดใหม่ และระบบจะลบให้อัตโนมัติเมื่อครบ 15 วัน</div>
+    </div>
+    <div id="historyHome"></div>
+  </section>
+
+  <!-- พื้นที่ทำงานหลังโหลดข้อมูล -->
+  <section id="workspace" class="hidden">
+    <div class="filter-bar" id="filterBar"></div>
+
+    <div class="panel" id="panel-dashboard"></div>
+    <div class="panel hidden" id="panel-sections"></div>
+    <div class="panel hidden" id="panel-sdg"></div>
+    <div class="panel hidden" id="panel-demo"></div>
+    <div class="panel hidden" id="panel-text"></div>
+    <div class="panel hidden" id="panel-report"></div>
+    <div class="panel hidden" id="panel-columns"></div>
+    <div class="panel hidden" id="panel-history"></div>
+  </section>
+</main>
+</div><!-- /main-col -->
+</div><!-- /app-shell -->
+
+<!-- modal เข้าสู่ระบบ (เก็บในเครื่อง ใช้ระบุผู้ใช้งานและผู้บันทึกประวัติ) -->
+<div id="loginModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2><i data-lucide="hand"></i> ยินดีต้อนรับ</h2>
+    <p>กรอกชื่อผู้ใช้งานก่อนเริ่มใช้ระบบ เพื่อบันทึกว่าใครเป็นผู้วิเคราะห์ข้อมูลแต่ละครั้ง<br>
+    <small>ข้อมูลเก็บไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น ไม่ส่งขึ้นอินเทอร์เน็ต</small></p>
+    <label>ชื่อ / ชื่อเล่น <input type="text" id="loginName" placeholder="เช่น ศุกร์"></label>
+    <label>ตำแหน่งในสโมสร <input type="text" id="loginRole" placeholder="เช่น ฝ่ายประเมินผล, นายกสโมสร"></label>
+    <button class="btn primary" id="btnLogin">เริ่มใช้งาน</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js?v=6" defer></script>
+</body>
+</html>
