@@ -1,2 +1,5 @@
 .DS_Store
 .claude/
+~$*.xlsx
+*.xlsx
+!sample-data.xlsx

@@ -327,7 +327,7 @@ function detectColumns(headers, rows) {
     const bracket = header.match(/^(.*?)\s*\[(.+)\]\s*$/);
     if (ratingOk >= 0.9 && (bracket || !DEMOG_HEADER.test(header))) {
       col.type = "rating";
-      if (bracket) { col.group = bracket[1].trim(); col.item = bracket[2].trim(); }
+      if (bracket) { col.group = bracket[1].trim() || "ด้านที่ไม่ระบุชื่อ"; col.item = bracket[2].trim(); }
       else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = header; }
       return col;
     }
@@ -1067,7 +1067,7 @@ function renderColumns(panel) {
       col.type = sel.value;
       if (col.type === "rating" && !col.group) {
         const b = col.header.match(/^(.*?)\s*\[(.+)\]\s*$/);
-        if (b) { col.group = b[1].trim(); col.item = b[2].trim(); }
+        if (b) { col.group = b[1].trim() || "ด้านที่ไม่ระบุชื่อ"; col.item = b[2].trim(); }
         else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = col.header; }
       }
       state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
