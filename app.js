@@ -306,6 +306,14 @@ const ID_HEADER = /(รหัส)/i;
 const DEMOG_HEADER = /(ชั้นปี|ปีที่ศึกษา|ระดับชั้น|อายุ|ห้อง|จำนวน)/i;
 const TEXT_HEADER = /(ข้อเสนอแนะ|ความคิดเห็น|ปัญหา|อุปสรรค|สิ่งที่ควรปรับปรุง|ประทับใจ|อยากให้|เหตุผล)/i;
 
+/* หมวดคำถามที่หัวข้อหลักว่าง (Google Forms ไม่ export ชื่อ section มา)
+   — ถ้าข้อคำถามมีรหัส 5Hs (Head/Hand/Heart/Habit) ให้ใช้ชื่อมาตรฐานของแบบประเมินกลาง */
+const H5_NAME = "ด้านทักษะแห่งอนาคต (Holistic Development: 5Hs)";
+const H5_ITEM_RE = /\b(Head|Hand|Heart|Habit)\b/i;
+function unnamedGroupName(item) {
+  return H5_ITEM_RE.test(item) ? H5_NAME : "ด้านที่ไม่ระบุชื่อ";
+}
+
 function detectColumns(headers, rows) {
   return headers.map((header, i) => {
     const values = rows.map((r) => r[i]).filter((v) => v !== "");
@@ -327,7 +335,7 @@ function detectColumns(headers, rows) {
     const bracket = header.match(/^(.*?)\s*\[(.+)\]\s*$/);
     if (ratingOk >= 0.9 && (bracket || !DEMOG_HEADER.test(header))) {
       col.type = "rating";
-      if (bracket) { col.group = bracket[1].trim() || "ด้านที่ไม่ระบุชื่อ"; col.item = bracket[2].trim(); }
+      if (bracket) { col.item = bracket[2].trim(); col.group = bracket[1].trim() || unnamedGroupName(col.item); }
       else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = header; }
       return col;
     }
@@ -979,6 +987,22 @@ function renderSections(panel, rows) {
     btn2.innerHTML = `<i data-lucide="image"></i> คัดลอกกราฟการกระจาย`;
     btn2.onclick = () => copyChartPNG(cfgLikert(items, themeVars(true), g.name + " — การกระจายของระดับคะแนน (%)"), 900, Math.max(260, items.length * 58 + 120));
     $(".card-actions", card).appendChild(btn2);
+
+    // แก้ชื่อด้านเองได้ — มีผลทั้งเว็บและรายงาน และถูกจำไว้ในประวัติ
+    const btnRen = document.createElement("button");
+    btnRen.className = "btn small";
+    btnRen.title = "แก้ชื่อด้านนี้";
+    btnRen.innerHTML = `<i data-lucide="pencil"></i>`;
+    btnRen.onclick = () => {
+      const name = prompt("ตั้งชื่อด้าน/หมวดคำถามนี้ (ใช้ในทุกหน้าและในรายงานราชการ)", g.name);
+      if (!name || !name.trim() || name.trim() === g.name) return;
+      state.columns.forEach((c) => { if (c.type === "rating" && c.group === g.name) c.group = name.trim(); });
+      bumpDataVersion();
+      saveSessionSnapshot();
+      renderActiveTab();
+      toast("เปลี่ยนชื่อด้านแล้ว");
+    };
+    $(".card-actions", card).appendChild(btnRen);
   });
 }
 
@@ -1109,7 +1133,7 @@ function renderColumns(panel) {
       col.type = sel.value;
       if (col.type === "rating" && !col.group) {
         const b = col.header.match(/^(.*?)\s*\[(.+)\]\s*$/);
-        if (b) { col.group = b[1].trim() || "ด้านที่ไม่ระบุชื่อ"; col.item = b[2].trim(); }
+        if (b) { col.item = b[2].trim(); col.group = b[1].trim() || unnamedGroupName(col.item); }
         else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = col.header; }
       }
       state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
