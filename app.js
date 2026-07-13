@@ -531,7 +531,9 @@ const endLabelPlugin = {
     ctx.textAlign = "left";
     meta.data.forEach((bar, i) => {
       const label = opts.labels[i];
-      if (label == null) return;
+      const raw = chart.data.datasets[0].data[i];
+      // ไม่วาดป้ายของแท่งที่ไม่มีข้อมูล — กันตัวเลขลอยไปกองที่แกน
+      if (label == null || label === "-" || !Number.isFinite(raw) || !Number.isFinite(bar.x)) return;
       ctx.fillText(label, bar.x + 6, bar.y);
     });
     ctx.restore();
@@ -543,7 +545,7 @@ function cfgMeanBar(labels, means, t, title) {
   return {
     type: "bar",
     data: {
-      labels: labels.map((l) => wrapLabel(l)),
+      labels: labels.map((l) => wrapLabel(l, 42, 2)),
       datasets: [{
         data: means,
         backgroundColor: t.series,
@@ -553,7 +555,7 @@ function cfgMeanBar(labels, means, t, title) {
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { right: 44 } },
+      layout: { padding: { right: 52 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -632,7 +634,7 @@ function cfgLikert(items, t, title) {
   }));
   return {
     type: "bar",
-    data: { labels: items.map((it) => wrapLabel(it.label)), datasets },
+    data: { labels: items.map((it) => wrapLabel(it.label, 42, 2)), datasets },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
@@ -666,7 +668,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { right: 74 } },
+      layout: { padding: { right: 88 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -683,7 +685,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
         endLabel: { color: t.text, labels: endLabels },
       },
       scales: {
-        x: { min: 0, ...(max ? { max } : {}), grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, font: { family: FONT_STACK, size: 11 }, callback: (v) => v + suffix } },
+        x: { min: 0, ...(max ? { max } : {}), grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, font: { family: FONT_STACK, size: 11 }, precision: 0, callback: (v) => v + suffix } },
         y: { grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
       },
     },
@@ -794,6 +796,15 @@ function renderDashboard(panel, rows) {
     <div class="tile"><div class="t-icon"><i data-lucide="award"></i></div><div><div class="t-label">ระดับผลการประเมิน</div><div class="t-value" style="font-size:20px;padding-top:4px">${levelChip(overall.mean)}</div><div class="t-extra">เกณฑ์แปลผลค่าเฉลี่ย 5 ระดับ</div></div></div>`;
   panel.appendChild(tiles);
 
+  // กลุ่มที่กรองไม่มีคำตอบแบบคะแนนเลย — แจ้งชัด ๆ แทนที่จะปล่อยตัวเลขว่าง
+  if (!overall.n) {
+    const note = document.createElement("div");
+    note.className = "card";
+    note.innerHTML = `<h3><i data-lucide="info"></i> ไม่มีคำตอบแบบคะแนน${state.filterValue ? `ในกลุ่ม "${esc(state.filterValue)}"` : "ในไฟล์นี้"}</h3>
+      <p class="card-sub" style="margin:6px 0 0">กลุ่มผู้ตอบนี้อาจไม่ได้รับชุดคำถามแบบคะแนน 1–5 — ลองดูแท็บ "ข้อมูลผู้ตอบ" หรือ "ข้อเสนอแนะ" หรือเปลี่ยนตัวกรองด้านบน</p>`;
+    panel.appendChild(note);
+  }
+
   // โดนัทการกระจายคะแนน + สรุปใจความสำคัญ อ่านจบใน 10 วินาที
   if (groups.length) {
     const sortedG = [...groups].sort((a, b) => b.total.mean - a.total.mean);
@@ -823,8 +834,8 @@ function renderDashboard(panel, rows) {
     const labels = groups.map((g) => g.name);
     const means = groups.map((g) => g.total.mean);
     const cfg = cfgMeanBar(labels, means, t);
-    addCopyChartBtn(card, () => cfgMeanBar(labels, means, themeVars(true)), 900, Math.max(200, labels.length * 44 + 70));
-    mountChart(card, cfg, Math.max(160, labels.length * 44 + 40));
+    addCopyChartBtn(card, () => cfgMeanBar(labels, means, themeVars(true)), 900, Math.max(200, labels.length * 54 + 70));
+    mountChart(card, cfg, Math.max(170, labels.length * 54 + 40));
   }
 
   const grid = document.createElement("div");
@@ -836,8 +847,8 @@ function renderDashboard(panel, rows) {
     const card = cardEl(grid, "ผู้ตอบแบบสอบถามจำแนกตามสถานะ", "จำนวน (ร้อยละ)");
     const cfg = cfgCountBar(entries.map((e) => e.label), entries.map((e) => e.n), t,
       { endLabels: entries.map((e) => `${e.n} (${e.pct.toFixed(1)}%)`) });
-    addCopyChartBtn(card, () => cfgCountBar(entries.map((e) => e.label), entries.map((e) => e.n), themeVars(true), { endLabels: entries.map((x) => `${x.n} (${x.pct.toFixed(1)}%)`) }), 900, Math.max(200, entries.length * 42 + 70));
-    mountChart(card, cfg, Math.max(150, entries.length * 42 + 30));
+    addCopyChartBtn(card, () => cfgCountBar(entries.map((e) => e.label), entries.map((e) => e.n), themeVars(true), { endLabels: entries.map((x) => `${x.n} (${x.pct.toFixed(1)}%)`) }), 900, Math.max(200, entries.length * 46 + 70));
+    mountChart(card, cfg, Math.max(160, entries.length * 46 + 30));
   }
 
   // ข้อที่เด่นสุด/ควรพัฒนา
@@ -896,12 +907,17 @@ function renderSections(panel, rows) {
   $("#ckShowFreq", ctrl).onchange = (e) => { state.ui.showFreq = e.target.checked; renderActiveTab(); };
 
   groups.forEach((g) => {
-    const card = cardEl(panel, g.name, `ผู้ตอบ ${Math.max(...g.items.map((it) => it.stats.n))} คน · ค่าเฉลี่ยรวม ${f2(g.total.mean)} (${levelLabel(g.total.mean)})`);
+    // แสดงเฉพาะข้อที่มีผู้ตอบจริง — ฟอร์มแยกเส้นทางทำให้บางข้อไม่มีคำตอบในบางกลุ่ม
+    const items = g.items.filter((it) => it.stats.n > 0);
+    const hidden = g.items.length - items.length;
+    const card = cardEl(panel, g.name,
+      `ผู้ตอบ ${Math.max(...items.map((it) => it.stats.n))} คน · ค่าเฉลี่ยรวม ${f2(g.total.mean)} (${levelLabel(g.total.mean)})` +
+      (hidden ? ` · ซ่อน ${hidden} ข้อที่ไม่มีผู้ตอบ${state.filterValue ? "ในกลุ่มนี้" : ""}` : ""));
 
     // ตาราง — เรียงเอาผลสำคัญ (x̄ / S.D. / ระดับ) ไว้ก่อน ความถี่เป็นส่วนเสริม
     const showFreq = state.ui.showFreq;
     const freqHead = showFreq ? `<th>5</th><th>4</th><th>3</th><th>2</th><th>1</th>` : "";
-    const rowsHtml = g.items.map((it) => {
+    const rowsHtml = items.map((it) => {
       const s = it.stats;
       const freqCells = showFreq ? [5, 4, 3, 2, 1].map((lv) => {
         const p = s.n ? ((s.freq[lv] / s.n) * 100).toFixed(1) : "0.0";
@@ -925,17 +941,17 @@ function renderSections(panel, rows) {
     const c2 = document.createElement("div");
     grid.appendChild(c1); grid.appendChild(c2);
 
-    const labels = g.items.map((it) => it.label);
-    const means = g.items.map((it) => it.stats.mean);
-    const h = Math.max(170, g.items.length * 52 + 40);
+    const labels = items.map((it) => it.label);
+    const means = items.map((it) => it.stats.mean);
+    const h = Math.max(180, items.length * 58 + 40);
     mountChart(c1, cfgMeanBar(labels, means, t, "ค่าเฉลี่ยรายข้อ"), h);
-    mountChart(c2, cfgLikert(g.items, t, "การกระจายของระดับคะแนน (%)"), h + 40);
+    mountChart(c2, cfgLikert(items, t, "การกระจายของระดับคะแนน (%)"), h + 50);
 
-    addCopyChartBtn(card, () => cfgMeanBar(labels, means, themeVars(true), g.name + " — ค่าเฉลี่ยรายข้อ"), 900, Math.max(220, g.items.length * 56 + 80));
+    addCopyChartBtn(card, () => cfgMeanBar(labels, means, themeVars(true), g.name + " — ค่าเฉลี่ยรายข้อ"), 900, Math.max(220, items.length * 58 + 80));
     const btn2 = document.createElement("button");
     btn2.className = "btn small";
     btn2.innerHTML = `<i data-lucide="image"></i> คัดลอกกราฟการกระจาย`;
-    btn2.onclick = () => copyChartPNG(cfgLikert(g.items, themeVars(true), g.name + " — การกระจายของระดับคะแนน (%)"), 900, Math.max(260, g.items.length * 56 + 120));
+    btn2.onclick = () => copyChartPNG(cfgLikert(items, themeVars(true), g.name + " — การกระจายของระดับคะแนน (%)"), 900, Math.max(260, items.length * 58 + 120));
     $(".card-actions", card).appendChild(btn2);
   });
 }
@@ -1155,10 +1171,11 @@ function buildReportBlocks(rows) {
     groups.forEach((g) => {
       tableNo++;
       const withFreq = state.reportOpts.freq;
+      const rItems = g.items.filter((it) => it.stats.n > 0); // ตัดข้อที่ไม่มีผู้ตอบออกจากรายงาน
       const head = withFreq
         ? ["รายการประเมิน", "5", "4", "3", "2", "1", "x̄", "S.D.", "ระดับผล"]
         : ["รายการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"];
-      const body = g.items.map((it) => {
+      const body = rItems.map((it) => {
         const s = it.stats;
         const base = [cell(esc(it.label), "left")];
         if (withFreq) [5, 4, 3, 2, 1].forEach((lv) => base.push(cell(`${s.freq[lv]}<br>(${s.n ? ((s.freq[lv] / s.n) * 100).toFixed(1) : "0.0"})`)));
@@ -1173,7 +1190,7 @@ function buildReportBlocks(rows) {
       let html = wCaption(tableNo, `ค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และระดับผลการประเมิน ${g.name}${withFreq ? " (ค่าในวงเล็บคือร้อยละ)" : ""}`);
       html += wTable(head, body);
 
-      const valid = g.items.filter((it) => it.stats.n > 0);
+      const valid = rItems;
       const best = valid.reduce((a, b) => (b.stats.mean > a.stats.mean ? b : a), valid[0]);
       const worst = valid.reduce((a, b) => (b.stats.mean < a.stats.mean ? b : a), valid[0]);
       let narr = `จากตารางที่ ${tableNo} พบว่า ผลการประเมิน${esc(g.name)}ในภาพรวมอยู่ในระดับ${levelLabel(g.total.mean)} (x̄ = ${f2(g.total.mean)}, S.D. = ${f2(g.total.sd)})`;
@@ -1182,7 +1199,7 @@ function buildReportBlocks(rows) {
 
       if (state.reportOpts.charts) {
         chartNo++;
-        const url = cachedChartURL("grp|" + g.name, () => chartToDataURL(cfgMeanBar(g.items.map((it) => it.label), g.items.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, g.items.length * 54 + 60)));
+        const url = cachedChartURL("grp|" + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
         html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
         html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ค่าเฉลี่ยผลการประเมิน${esc(g.name)}</p>`;
       }

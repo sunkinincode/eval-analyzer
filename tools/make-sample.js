@@ -54,7 +54,7 @@ const QUAL = "ด้านคุณภาพกิจกรรม";
 const LEARN = "ด้านการเรียนรู้และพัฒนาตนเอง";
 const OVER = "ด้านภาพรวม";
 const ACAD = "ประเภทวิชาการ";
-const SPEC = "แบบประเมินตามวัตถุประสงค์เฉพาะของโครงการ";
+const SPEC = "แบบประเมินตามวัตถุประสงค์เฉพาะของโครงการค่ายอาสาพัฒนาโรงเรียนบ้านตัวอย่าง ประจำปีการศึกษา 2569";
 
 const matrix = (section, items) => items.map((it) => `${section} [${it}]`);
 
@@ -144,13 +144,28 @@ for (let i = 0; i < N; i++) {
   row[H.sex] = isPupil ? pick(["ชาย", "หญิง", "ไม่ต้องการระบุ"], [45, 48, 7]) : "";
   row[H.grade] = isPupil ? pick(["ม.4", "ม.5", "ม.6"], [40, 35, 25]) : "";
 
+  // แต่ละกลุ่มผู้ตอบตอบเฉพาะส่วนของตัวเอง (เหมือนฟอร์มจริงที่แยกเส้นทางคำถาม)
+  const isStaff = status === "อาจารย์/บุคลากร";
+  const answers = {
+    [PSU]: isStudentU || isStaff,
+    [SAT]: isStudentU || isStaff,
+    [H5]: isStudentU,
+    SDG: isStudentU || isStaff,
+    [QUAL]: isPupil,
+    [LEARN]: isPupil,
+    [OVER]: true,
+    [ACAD]: isPupil,
+    [SPEC]: isPupil,
+  };
   for (const col of COLS) {
     if (col in row) continue;
     if (col.startsWith("SDG")) {
-      // SDG 4/17 สอดคล้องสูง, SDG 1 ต่ำ
+      if (!answers.SDG) { row[col] = ""; continue; }
       const p = col.startsWith("SDG 4") ? 0.93 : col.startsWith("SDG 17") ? 0.85 : col.startsWith("SDG 3") ? 0.72 : col.startsWith("SDG 10") ? 0.66 : 0.3;
       row[col] = rand() < p ? "สอดคล้อง / บรรลุ" : "ไม่สอดคล้อง";
     } else if (col.includes("[")) {
+      const section = col.slice(0, col.indexOf(" ["));
+      if (!answers[section]) { row[col] = ""; continue; }
       const bias = col.startsWith(QUAL) || col.startsWith(OVER) ? 1 : col.startsWith(H5) ? -0.5 : 0;
       row[col] = rating(bias);
     } else if (col === "ข้อเสนอแนะเพิ่มเติม") {
