@@ -517,6 +517,32 @@ function wrapLabel(s, max = 44, maxLines = 3) {
   return lines;
 }
 
+/** ป้ายแกนกราฟแบบบรรทัดเดียว ตัดด้วย … ให้พอดีงบพิกเซลจริง
+    — วัดด้วย canvas ฟอนต์เดียวกับที่ Chart.js ใช้วาด จึงไม่มีทางล้น/จมเข้าไปในแท่ง
+    ไม่ว่าฟอนต์ของแต่ละเครื่องจะวัดข้อความไทยกว้างแค่ไหน (ข้อความเต็มอยู่ใน tooltip) */
+const LABEL_PX = 168;
+let _measureCtx = null;
+function shortLabel(s, maxPx = LABEL_PX) {
+  s = String(s).replace(/\s+/g, " ").trim();
+  if (!_measureCtx) _measureCtx = document.createElement("canvas").getContext("2d");
+  _measureCtx.font = `11.5px ${FONT_STACK}`;
+  if (_measureCtx.measureText(s).width <= maxPx) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (_measureCtx.measureText(s.slice(0, mid) + "…").width <= maxPx) lo = mid;
+    else hi = mid - 1;
+  }
+  return s.slice(0, lo) + "…";
+}
+
+/** บังคับความกว้างขั้นต่ำของแกน Y ให้ครอบคลุมงบป้าย — กันการวัดที่คลาดของบางเครื่อง */
+function yAxisFloor(scale) {
+  if (scale.axis === "y") {
+    scale.width = Math.max(scale.width, Math.min(scale.chart.width * 0.48, LABEL_PX + 22));
+  }
+}
+
 /** plugin: เขียนตัวเลขที่ปลายแท่ง (แนวนอน) */
 const endLabelPlugin = {
   id: "endLabel",
@@ -545,7 +571,7 @@ function cfgMeanBar(labels, means, t, title) {
   return {
     type: "bar",
     data: {
-      labels: labels.map((l) => wrapLabel(l, 42, 2)),
+      labels: labels.map((l) => shortLabel(l)),
       datasets: [{
         data: means,
         backgroundColor: t.series,
@@ -569,7 +595,7 @@ function cfgMeanBar(labels, means, t, title) {
       },
       scales: {
         x: { min: 0, max: 5, grid: { color: t.grid }, border: { color: t.axis }, ticks: { stepSize: 1, color: t.muted, font: { family: FONT_STACK, size: 11 } } },
-        y: { grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
       },
     },
     plugins: [endLabelPlugin],
@@ -634,7 +660,7 @@ function cfgLikert(items, t, title) {
   }));
   return {
     type: "bar",
-    data: { labels: items.map((it) => wrapLabel(it.label, 42, 2)), datasets },
+    data: { labels: items.map((it) => shortLabel(it.label)), datasets },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
@@ -649,7 +675,7 @@ function cfgLikert(items, t, title) {
       },
       scales: {
         x: { stacked: true, min: 0, max: 100, grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, callback: (v) => v + "%", font: { family: FONT_STACK, size: 11 } } },
-        y: { stacked: true, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { stacked: true, afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
       },
     },
   };
@@ -660,7 +686,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
   return {
     type: "bar",
     data: {
-      labels: labels.map((l) => wrapLabel(l, 36, 2)),
+      labels: labels.map((l) => shortLabel(l)),
       datasets: [{
         data: values, backgroundColor: t.series,
         borderRadius: 4, borderSkipped: "start", barThickness: 18, maxBarThickness: 20,
@@ -686,7 +712,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
       },
       scales: {
         x: { min: 0, ...(max ? { max } : {}), grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, font: { family: FONT_STACK, size: 11 }, precision: 0, callback: (v) => v + suffix } },
-        y: { grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
       },
     },
     plugins: [endLabelPlugin],
@@ -1584,6 +1610,13 @@ function init() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (state.theme === "auto" && !$("#workspace").classList.contains("hidden")) renderActiveTab();
   });
+
+  // วาดกราฟใหม่หลังเว็บฟอนต์โหลดเสร็จ — กัน Chart.js วัดขนาดข้อความด้วยฟอนต์สำรองค้างไว้
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => {
+      if (!$("#workspace").classList.contains("hidden")) renderActiveTab();
+    });
+  }
 
   // ผู้ใช้งาน + ประวัติ
   try { state.user = JSON.parse(localStorage.getItem("evalUser") || "null"); } catch { state.user = null; }
