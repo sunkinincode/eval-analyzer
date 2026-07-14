@@ -86,7 +86,7 @@ const state = {
   activeTab: "dashboard",
   charts: [],        // Chart instances ของแท็บที่แสดงอยู่
   projectName: "",
-  reportOpts: { charts: true, freq: false, thaiNum: false },
+  reportOpts: { charts: true, chartStyle: "mean", freq: false, thaiNum: false },
   ui: { showFreq: false },
   user: null,        // { name, role } — จาก localStorage
   sessionId: null,   // id ของรายการประวัติที่กำลังทำงานอยู่
@@ -305,7 +305,8 @@ async function saveSessionSnapshot() {
       mergedFrom: state.mergedFrom,
       headers: state.headers,
       rows: state.rows,
-      colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item })),
+      colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item, mergeInto: c.mergeInto ?? null, noReport: c.noReport ?? false })),
+      overallMean: (() => { const m = analyzeDataset(state.rows, state.columns).overall.mean; return Number.isFinite(m) ? m : null; })(),
     });
   } catch (e) { console.warn("บันทึกประวัติไม่สำเร็จ", e); }
 }
@@ -516,7 +517,7 @@ function updateFileMeta() {
 function filteredRows() {
   const active = Object.entries(state.filterSel).filter(([, v]) => v != null);
   if (!active.length) return state.rows;
-  return state.rows.filter((r) => active.every(([i, v]) => String(r[+i]).trim() === v));
+  return state.rows.filter((r) => active.every(([i, v]) => rowValueCombined(r, +i) === v));
 }
 
 /** สถิติจากค่าคะแนนที่แปลงเป็นตัวเลข 1–5 แล้ว */
@@ -619,10 +620,23 @@ function computeSdgs(rows, columns = state.columns) {
   }).filter((s) => s.n > 0);
 }
 
-function catFreq(rows, colIdx) {
+/** คอลัมน์ที่ถูก "รวมเข้ากับ" คอลัมน์นี้ (เช่น บทบาท รวมเข้ากับ สถานะ — คำถามเดียวกันคนละกิ่งของฟอร์ม) */
+function mergedIntoCols(colIdx, columns = state.columns) {
+  return columns.filter((c) => c.mergeInto === colIdx && c.type === "categorical").map((c) => c.i);
+}
+/** ค่าของแถวเมื่อรวมคอลัมน์แล้ว — ใช้ค่าแรกที่ไม่ว่าง (ฟอร์มแยกกิ่งจะกรอกช่องเดียว) */
+function rowValueCombined(r, colIdx, columns = state.columns) {
+  for (const i of [colIdx, ...mergedIntoCols(colIdx, columns)]) {
+    const v = String(r[i] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function catFreq(rows, colIdx, columns = state.columns) {
   const map = new Map();
   rows.forEach((r) => {
-    const v = String(r[colIdx]).trim();
+    const v = rowValueCombined(r, colIdx, columns);
     if (v === "") return;
     map.set(v, (map.get(v) || 0) + 1);
   });
@@ -1069,9 +1083,9 @@ function renderDashboard(panel, rows) {
 
   // แผนที่ความถี่ (heatmap) — จำนวนผู้ตอบแต่ละระดับคะแนน รายข้อ สีเข้ม = คนมาก
   if (groups.length) {
-    const hm = cardEl(panel, "แผนที่ความถี่ของคะแนน", "แต่ละช่องคือจำนวนผู้ตอบของระดับคะแนนนั้น (สีเข้ม = คนมาก) — ชี้ที่ช่องเพื่อดูรายละเอียด", "grid-3x3");
-    // ramp สีน้ำเงินแบบ sequential (โทนเดียว อ่อน→เข้ม) จากชุดสีมาตรฐาน
-    const seq = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#1c5cab", "#104281"];
+    const hm = cardEl(panel, "แผนที่ความถี่ของคะแนน", "สีเข้ม = ผู้ตอบมาก — ชี้ที่ช่องเพื่อดูจำนวนและร้อยละ", "grid-3x3");
+    // ramp มรกต อ่อน→เข้ม (เน้นความสวยเข้าธีม ตัวเลขดูจาก tooltip)
+    const seq = ["#d9f4e7", "#abe8cf", "#79d8b1", "#47c391", "#23aa77", "#108b5f", "#076a48"];
     let maxN = 1;
     groups.forEach((g) => g.items.forEach((it) => [5, 4, 3, 2, 1].forEach((lv) => { maxN = Math.max(maxN, it.stats.freq[lv]); })));
     const body = groups.map((g) => {
@@ -1083,9 +1097,10 @@ function renderDashboard(panel, rows) {
           ${[5, 4, 3, 2, 1].map((lv) => {
             const n = it.stats.freq[lv];
             const ci = n === 0 ? -1 : Math.min(seq.length - 1, Math.round((n / maxN) * (seq.length - 1)));
-            const style = ci < 0 ? "" : `background:${seq[ci]};border-color:transparent;color:${ci >= 3 ? "#fff" : "#0d366b"}`;
+            const glow = ci >= 5 ? `;box-shadow:0 0 14px ${seq[ci]}66` : "";
+            const style = ci < 0 ? "" : `background:${seq[ci]};border-color:transparent${glow}`;
             const pct = it.stats.n ? ((n / it.stats.n) * 100).toFixed(1) : "0.0";
-            return `<span class="hm-cell" style="${style}" title="${esc(it.label)}\nคะแนน ${lv}: ${n} คน (${pct}%)">${n || ""}</span>`;
+            return `<span class="hm-cell" style="${style}" title="${esc(it.label)}\nคะแนน ${lv}: ${n} คน (${pct}%)"></span>`;
           }).join("")}
         </div>`).join("");
     }).join("");
@@ -1094,7 +1109,7 @@ function renderDashboard(panel, rows) {
         <div class="hm-row hm-head"><span class="hm-name"></span>${[5, 4, 3, 2, 1].map((lv) => `<span class="hm-col">${lv}</span>`).join("")}</div>
         ${body}
       </div>
-      <p class="card-sub" style="margin:10px 0 0">ระดับคะแนน: 5 = มากที่สุด … 1 = ควรปรับปรุง</p>`);
+      <div class="hm-legend"><span>ระดับคะแนน 5 = มากที่สุด … 1 = ควรปรับปรุง</span><span class="hm-scale-wrap">น้อย <span class="hm-scale"></span> มาก</span></div>`);
   }
 
   const grid = document.createElement("div");
@@ -1285,7 +1300,7 @@ function renderSdg(panel, rows) {
    ============================================================ */
 function renderDemographics(panel, rows) {
   const t = themeVars();
-  const cols = state.columns.filter((c) => c.type === "categorical");
+  const cols = state.columns.filter((c) => c.type === "categorical" && !c.mergeInto);
   if (!cols.length) {
     panel.innerHTML = `<div class="card">ไม่พบคอลัมน์ข้อมูลทั่วไปแบบตัวเลือก</div>`;
     return;
@@ -1342,12 +1357,25 @@ function renderColumns(panel) {
     const samples = [...new Set(vals)].slice(0, 3).join(" · ");
     const opts = Object.entries(TYPE_LABELS).map(([v, l]) => `<option value="${v}" ${c.type === v ? "selected" : ""}>${l}</option>`).join("");
     const pct = N ? Math.round((vals.length / N) * 100) : 0;
-    const groupSel = c.type === "rating"
-      ? `<select class="coltype colgroup" data-col="${c.i}">
+    let groupSel;
+    if (c.type === "rating") {
+      groupSel = `<select class="coltype colgroup" data-col="${c.i}">
           ${groupNames.map((g) => `<option value="${esc(g)}" ${c.group === g ? "selected" : ""}>${esc(g.length > 38 ? g.slice(0, 38) + "…" : g)}</option>`).join("")}
           <option value="__new__">➕ สร้างด้านใหม่…</option>
-        </select>`
-      : `<span class="sugg-count">—</span>`;
+        </select>`;
+    } else if (c.type === "categorical") {
+      // รวมกับคอลัมน์อื่นที่เป็นคำถามเดียวกัน (คนละกิ่งของฟอร์ม) + เลือกว่าลงรายงานไหม
+      const others = state.columns.filter((o) => o.type === "categorical" && o.i !== c.i && !o.mergeInto && o.mergeInto !== c.i && !state.columns.some((x) => x.mergeInto === c.i && x.i === o.i));
+      groupSel = `<select class="coltype colmerge" data-col="${c.i}">
+          <option value="">— แสดงแยก</option>
+          ${others.map((o) => `<option value="${o.i}" ${c.mergeInto === o.i ? "selected" : ""}>รวมกับ: ${esc(o.header.slice(0, 30))}</option>`).join("")}
+        </select>
+        <label class="ck" style="margin-top:4px;display:block"><input type="checkbox" class="colreport" data-col="${c.i}" ${c.noReport ? "" : "checked"}> ลงรายงาน</label>`;
+    } else if (c.type === "text") {
+      groupSel = `<label class="ck"><input type="checkbox" class="colreport" data-col="${c.i}" ${c.noReport ? "" : "checked"}> ลงรายงาน</label>`;
+    } else {
+      groupSel = `<span class="sugg-count">—</span>`;
+    }
     return `<tr>
       <td class="item">${esc(c.header)}</td>
       <td class="num">${vals.length}/${N}<span class="meanbar" style="min-width:44px"><i style="width:${pct}%"></i></span></td>
@@ -1377,6 +1405,29 @@ function renderColumns(panel) {
       toast(`เปลี่ยน "${col.header.slice(0, 30)}..." เป็น ${TYPE_LABELS[col.type]}`);
     };
   });
+  // รวมคอลัมน์ตัวเลือกที่เป็นคำถามเดียวกัน (คนละกิ่งของฟอร์ม)
+  $$("select.colmerge", card).forEach((sel) => {
+    sel.onchange = () => {
+      const col = state.columns[+sel.dataset.col];
+      col.mergeInto = sel.value === "" ? null : +sel.value;
+      updateStatusCol();
+      bumpDataVersion();
+      saveSessionSnapshot();
+      renderFilterBar();
+      renderActiveTab();
+      toast(col.mergeInto != null ? `รวม "${col.header.slice(0, 22)}" เข้ากับ "${state.columns[col.mergeInto].header.slice(0, 22)}"` : `แยก "${col.header.slice(0, 25)}" ออกมาแสดงเอง`);
+    };
+  });
+  // เลือกว่าคอลัมน์ไหนลงรายงานราชการ
+  $$("input.colreport", card).forEach((cb) => {
+    cb.onchange = () => {
+      const col = state.columns[+cb.dataset.col];
+      col.noReport = !cb.checked;
+      saveSessionSnapshot();
+      toast(`${col.header.slice(0, 28)} — ${cb.checked ? "ลงรายงาน" : "ไม่ลงรายงาน (ยังแสดงบนเว็บ)"}`);
+    };
+  });
+
   // ย้ายข้อไปด้านอื่น / สร้างด้านใหม่
   $$("select.colgroup", card).forEach((sel) => {
     sel.onchange = () => {
@@ -1515,10 +1566,10 @@ function datasetBlocks(ds, num, rk) {
   let tableNo = num.table, chartNo = num.chart;
 
   // ---------- ตอนที่ 1 ข้อมูลทั่วไป ----------
-  const catCols = columns.filter((c) => c.type === "categorical");
+  const catCols = columns.filter((c) => c.type === "categorical" && !c.mergeInto && !c.noReport);
   const catBlocksHtml = [];
   catCols.forEach((c) => {
-    const { entries, total } = catFreq(rows, c.i);
+    const { entries, total } = catFreq(rows, c.i, columns);
     if (!entries.length) return;
     tableNo++;
     let html = wCaption(tableNo, `จำนวนและร้อยละของผู้ตอบแบบสอบถาม จำแนกตาม${c.header}`);
@@ -1577,10 +1628,19 @@ function datasetBlocks(ds, num, rk) {
       html += wp(narr);
 
       if (state.reportOpts.charts) {
-        chartNo++;
-        const url = cachedChartURL(`${rk}|${ds.key}|grp|` + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
-        html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-        html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ค่าเฉลี่ยผลการประเมิน${esc(g.name)}</p>`;
+        const style = state.reportOpts.chartStyle || "mean";
+        if (style === "mean" || style === "both") {
+          chartNo++;
+          const url = cachedChartURL(`${rk}|${ds.key}|grpM|` + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
+          html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
+          html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ค่าเฉลี่ยผลการประเมิน${esc(g.name)}</p>`;
+        }
+        if (style === "likert" || style === "both") {
+          chartNo++;
+          const url = cachedChartURL(`${rk}|${ds.key}|grpL|` + g.name, () => chartToDataURL(cfgLikert(rItems, themeVars(true)), 860, Math.max(260, rItems.length * 58 + 120)));
+          html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
+          html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ร้อยละการกระจายระดับคะแนน${esc(g.name)}</p>`;
+        }
       }
       partHtml.push(html);
     });
@@ -1638,7 +1698,7 @@ function datasetBlocks(ds, num, rk) {
   }
 
   // ---------- ตอนที่ 4 ข้อเสนอแนะ ----------
-  const textCols = columns.filter((c) => c.type === "text");
+  const textCols = columns.filter((c) => c.type === "text" && !c.noReport);
   const textHtml = [];
   textCols.forEach((c) => {
     const answers = textAnswers(rows, c.i);
@@ -1664,7 +1724,13 @@ function renderReport(panel, rows) {
   controls.className = "report-controls";
   controls.innerHTML = `
     <input type="text" id="projName" placeholder="พิมพ์ชื่อโครงการ เช่น ค่ายวิศวฯ สานฝันสู่ชนบท ครั้งที่ 12 (จะปรากฏในหัวรายงาน)" value="${esc(state.projectName)}">
-    <label class="ck"><input type="checkbox" id="ckCharts" ${state.reportOpts.charts ? "checked" : ""}> แนบรูปแผนภูมิ</label>
+    <label class="ck">กราฟ:
+      <select id="selChartStyle" class="coltype">
+        <option value="mean" ${state.reportOpts.chartStyle === "mean" ? "selected" : ""}>ค่าเฉลี่ยรายข้อ</option>
+        <option value="likert" ${state.reportOpts.chartStyle === "likert" ? "selected" : ""}>การกระจายคะแนน (%)</option>
+        <option value="both" ${state.reportOpts.chartStyle === "both" ? "selected" : ""}>ทั้งสองแบบ</option>
+        <option value="none" ${state.reportOpts.charts ? "" : "selected"}>ไม่แนบกราฟ</option>
+      </select></label>
     <label class="ck"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}> แสดงความถี่รายระดับ (5–1) ในตาราง</label>
     <label class="ck"><input type="checkbox" id="ckThai" ${state.reportOpts.thaiNum ? "checked" : ""}> ใช้เลขไทย</label>
     <button class="btn primary" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกรายงานทั้งหมด</button>
@@ -1730,7 +1796,11 @@ function renderReport(panel, rows) {
   });
 
   $("#projName").onchange = (e) => { state.projectName = e.target.value; saveSessionSnapshot(); renderActiveTab(); };
-  $("#ckCharts").onchange = (e) => { state.reportOpts.charts = e.target.checked; renderActiveTab(); };
+  $("#selChartStyle").onchange = (e) => {
+    state.reportOpts.charts = e.target.value !== "none";
+    if (e.target.value !== "none") state.reportOpts.chartStyle = e.target.value;
+    renderActiveTab();
+  };
   $("#ckFreq").onchange = (e) => { state.reportOpts.freq = e.target.checked; renderActiveTab(); };
   $("#ckThai").onchange = (e) => { state.reportOpts.thaiNum = e.target.checked; renderActiveTab(); };
   $("#btnCopyAll").onclick = () => copyHtmlToClipboard(blocks.map((b) => b.html).join(""));
@@ -1811,10 +1881,32 @@ function renderHistoryHome() {
   const box = $("#historyHome");
   if (!box) return;
   box.innerHTML = "";
-  if (!$("#emptyState").classList.contains("hidden")) {
-    box.style.marginTop = "20px";
+  if ($("#emptyState").classList.contains("hidden")) return;
+  box.style.marginTop = "20px";
+  (async () => {
+    let sessions = [];
+    try { sessions = await dbGetAll("sessions"); } catch { /* noop */ }
+    sessions.sort((a, b) => b.savedAt - a.savedAt);
+    if (sessions.length) {
+      // สแต็กแบบประเมินซ้อนกันแบบพัดเอกสาร — กดเพื่อเปิดดูข้อมูล
+      const cards = sessions.slice(0, 6);
+      const mid = (cards.length - 1) / 2;
+      const deck = document.createElement("div");
+      deck.className = "deck-wrap";
+      deck.innerHTML = `<h3 class="deck-title">เปิดจากโครงการล่าสุด</h3><div class="deck">` +
+        cards.map((s, i) => `
+          <button class="deck-card" style="--r:${((i - mid) * 5).toFixed(1)}deg;--y:${(Math.abs(i - mid) * 12).toFixed(0)}px" data-open="${s.id}" title="${esc(s.projectName || s.fileName)}">
+            <span class="dc-icon"><i data-lucide="file-text"></i></span>
+            <b>${esc((s.projectName || s.fileName.replace(/\.(xlsx|xls|csv).*$/i, "")).slice(0, 44))}</b>
+            <span class="dc-meta">${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH", { day: "numeric", month: "short" })}</span>
+            ${Number.isFinite(s.overallMean) ? `<span class="dc-score">${s.overallMean.toFixed(2)}<i>/5</i></span>` : ""}
+          </button>`).join("") + `</div>`;
+      box.appendChild(deck);
+      $$("[data-open]", deck).forEach((b) => (b.onclick = () => openSession(b.dataset.open)));
+      refreshIcons();
+    }
     buildHistoryListCard(box, { compact: true });
-  }
+  })();
 }
 
 /** เปิดข้อมูลจากประวัติ (ไม่ต้องอัปโหลดไฟล์ใหม่) */

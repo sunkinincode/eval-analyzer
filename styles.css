@@ -603,3 +603,50 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
 /* ตัวกรองหลายชั้น */
 .filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
 .filter-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+/* ===== สแต็กแบบประเมิน (หน้าแรก) — การ์ดพัดซ้อนกัน กดเพื่อเปิด ===== */
+.deck-wrap { margin: 30px 0 4px; }
+.deck-title { font-size: 15px; margin: 0 0 20px; letter-spacing: -0.01em; }
+.deck { display: flex; justify-content: center; align-items: flex-end; padding: 12px 0 30px; }
+.deck-card {
+  position: relative;
+  width: 172px; min-height: 200px; margin: 0 -34px;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 16px; border-radius: 20px; text-align: left;
+  font-family: inherit; font-size: 13px; cursor: pointer;
+  color: var(--text-primary);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 30%),
+    color-mix(in srgb, var(--surface-1) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  transform: rotate(var(--r)) translateY(var(--y));
+  transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.3, 1.25), box-shadow 0.24s, border-color 0.24s;
+}
+.deck-card:hover, .deck-card:focus-visible {
+  transform: rotate(0deg) translateY(-24px) scale(1.07);
+  z-index: 10;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 26px 54px -18px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow-pop);
+}
+.deck-card b { font-size: 12.5px; line-height: 1.4; font-weight: 600; }
+.dc-icon {
+  width: 36px; height: 36px; border-radius: 12px; flex-shrink: 0;
+  background: var(--accent-grad);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 3px;
+}
+.dc-icon svg.lucide { color: #fff; width: 16px; height: 16px; }
+.dc-meta { font-size: 11px; color: var(--muted); }
+.dc-score { margin-top: auto; font-size: 22px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+.dc-score i { font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+@media (max-width: 760px) {
+  .deck { flex-wrap: wrap; gap: 12px; }
+  .deck-card { margin: 0; transform: none; }
+}
+
+/* heatmap legend */
+.hm-legend { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.hm-scale-wrap { display: inline-flex; align-items: center; gap: 7px; }
+.hm-scale { display: inline-block; width: 130px; height: 8px; border-radius: 99px; background: linear-gradient(90deg, #d9f4e7, #076a48); }
