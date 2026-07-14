@@ -95,6 +95,8 @@ const state = {
   reportExtraIds: new Set(), // id ประวัติของแบบประเมินอื่นที่เลือกมารวมในเล่มเดียว
   _extraCache: {},           // ข้อมูลชุดอื่นที่โหลดมาแล้ว (id → dataset)
   mergedFrom: [],            // ชื่อชุดข้อมูลที่ถูกผนวกเข้ากับชุดปัจจุบัน (ระดับแอป)
+  mergedIds: new Set(),      // id ประวัติที่ผนวกไปแล้ว — กันผนวกซ้ำ
+  _preMerge: null,           // สำเนาข้อมูลก่อนผนวกครั้งแรก — ไว้กด "เลิกผนวก"
 };
 
 /* ============================================================
@@ -116,6 +118,31 @@ function ensureSourceColumn() {
 /** ผนวกรายการจากประวัติเข้ากับชุดปัจจุบัน — หัวตารางตรงกันจับคู่คอลัมน์เดิม
     หัวที่ไม่มีในชุดหลักต่อคอลัมน์ใหม่ให้ (กลายเป็นเคสเดียวกับฟอร์มแยกเส้นทางผู้ตอบ) */
 function mergeRecordIntoCurrent(rec) {
+  // กันผนวกชุดเดิมซ้ำ — สาเหตุหลักของจำนวนผู้ตอบพองเป็นสองเท่า
+  if (rec.id && state.mergedIds.has(rec.id)) {
+    toast("ชุดข้อมูลนี้ถูกผนวกไปแล้ว — ไม่ผนวกซ้ำ");
+    return;
+  }
+  const baseHeaders = (state._preMerge?.headers ?? state.headers).filter((h) => h !== "ชุดแบบประเมิน");
+  const baseRowCount = state._preMerge?.rows.length ?? state.rows.length;
+  const looksSame = rec.fileName === state.fileName ||
+    (JSON.stringify(rec.headers.filter((h) => h !== "ชุดแบบประเมิน")) === JSON.stringify(baseHeaders) && rec.rows.length === baseRowCount);
+  if (looksSame && !confirm(`⚠️ "${rec.fileName}" ดูเหมือนเป็นข้อมูลชุดเดียวกับไฟล์ปัจจุบัน
+ผนวกแล้วผู้ตอบจะถูกนับซ้ำเป็นสองเท่า (เช่น 74 กลาย 148)
+
+ยืนยันว่าต้องการผนวกจริง ๆ หรือไม่?`)) {
+    return;
+  }
+  // สำรองข้อมูลก่อนผนวกครั้งแรก — เผื่อกด "เลิกผนวก"
+  if (!state._preMerge) {
+    state._preMerge = {
+      headers: [...state.headers],
+      rows: state.rows.map((r) => [...r]),
+      columns: state.columns.map((c) => ({ ...c })),
+      respTarget: state.respTarget,
+    };
+  }
+  if (rec.id) state.mergedIds.add(rec.id);
   const srcIdx = ensureSourceColumn();
   const dLabel = rec.fileName.replace(/\.(xlsx|xls|csv).*$/i, "");
 
@@ -153,6 +180,26 @@ function mergeRecordIntoCurrent(rec) {
   toast(`ผนวก "${dLabel.slice(0, 30)}" แล้ว — รวม ${state.rows.length} คำตอบ`);
 }
 
+/** ถอนการผนวกทั้งหมด — กลับไปเป็นข้อมูลไฟล์เดิมก่อนผนวกครั้งแรก */
+function undoMerge() {
+  if (!state._preMerge) return;
+  state.headers = state._preMerge.headers;
+  state.rows = state._preMerge.rows;
+  state.columns = state._preMerge.columns;
+  state.respTarget = state._preMerge.respTarget;
+  state.mergedFrom = [];
+  state.mergedIds = new Set();
+  state._preMerge = null;
+  state.filterSel = {};
+  updateStatusCol();
+  bumpDataVersion();
+  saveSessionSnapshot();
+  updateFileMeta();
+  renderFilterBar();
+  renderActiveTab();
+  toast("ยกเลิกการผนวกแล้ว — กลับเป็นข้อมูลไฟล์เดิม");
+}
+
 /** modal เลือกชุดข้อมูลจากประวัติมาผนวก */
 async function openMergeModal() {
   let sessions = [];
@@ -164,12 +211,19 @@ async function openMergeModal() {
     <h2><i data-lucide="layers"></i> ผนวกชุดข้อมูลเข้ากับไฟล์ปัจจุบัน</h2>
     <p>ข้อมูลจะรวมเป็นชุดเดียวและวิเคราะห์ด้วยกันทุกหน้า พร้อมคอลัมน์ "ชุดแบบประเมิน" ไว้กรองแยกชุด — ไฟล์คนละแบบฟอร์มระบบจะต่อคอลัมน์ให้อัตโนมัติ</p>
     ${sessions.length
-      ? sessions.map((s, i) => `
+      ? sessions.map((s, i) => {
+          const merged = state.mergedIds.has(s.id);
+          const sameFile = s.fileName === state.fileName;
+          return `
         <div class="combine-item">
           <b>${esc(s.projectName || s.fileName)}</b>
           <span class="sugg-count">· ${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH")}</span>
-          <button class="btn small primary" data-merge="${i}" style="margin-left:auto"><i data-lucide="git-merge"></i> ผนวก</button>
-        </div>`).join("")
+          ${sameFile && !merged ? '<span class="lv l3">อาจเป็นไฟล์เดียวกัน</span>' : ""}
+          ${merged
+            ? '<span class="lv l5" style="margin-left:auto">✓ ผนวกแล้ว</span>'
+            : `<button class="btn small primary" data-merge="${i}" style="margin-left:auto"><i data-lucide="git-merge"></i> ผนวก</button>`}
+        </div>`;
+        }).join("")
       : `<p class="card-sub">ยังไม่มีชุดข้อมูลอื่นในประวัติ — อัปโหลดไฟล์ที่ต้องการผนวกก่อน (ระบบบันทึกอัตโนมัติ) แล้วค่อยกลับมากดผนวก</p>`}
     <button class="btn" id="mergeClose" style="margin-top:12px">ปิด</button>
   </div>`;
@@ -303,6 +357,7 @@ async function saveSessionSnapshot() {
       projectName: state.projectName,
       respTarget: state.respTarget,
       mergedFrom: state.mergedFrom,
+      mergedIds: [...state.mergedIds],
       headers: state.headers,
       rows: state.rows,
       colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item, mergeInto: c.mergeInto ?? null, noReport: c.noReport ?? false })),
@@ -411,6 +466,8 @@ function loadSheet(sheetName, opts = {}) {
   if (!opts.fromHistory) state.respTarget = scanRespondTarget(state.workbook, sheetName, state.rows.length);
   state.reportExtraIds = new Set();
   state.mergedFrom = [];
+  state.mergedIds = new Set();
+  state._preMerge = null;
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -426,6 +483,17 @@ function loadSheet(sheetName, opts = {}) {
   if (!opts.fromHistory) {
     state.sessionId = (crypto.randomUUID && crypto.randomUUID()) || "id-" + Date.now() + "-" + Math.random().toString(36).slice(2);
     saveSessionSnapshot();
+    // อัปโหลดไฟล์เดิมซ้ำ → ลบรายการประวัติเก่าของไฟล์เดียวกันทิ้ง (ตัดต้นตอรายการซ้ำที่ชวนให้ผนวกผิด)
+    (async () => {
+      try {
+        const all = await dbGetAll("sessions");
+        for (const old of all) {
+          if (old.id !== state.sessionId && old.fileName === state.fileName) {
+            await dbDelete("sessions", old.id);
+          }
+        }
+      } catch { /* noop */ }
+    })();
   } else {
     state.sessionId = opts.sessionId;
   }
@@ -512,6 +580,7 @@ function activeFilterText() {
 function updateFileMeta() {
   $("#fileMeta").textContent = `${state.rows.length} คำตอบ · ${state.headers.length} คอลัมน์` +
     (state.mergedFrom?.length ? ` · ผนวกแล้ว ${state.mergedFrom.length + 1} ชุด` : "");
+  $("#btnUnmerge")?.classList.toggle("hidden", !state._preMerge);
 }
 
 function filteredRows() {
@@ -1927,6 +1996,8 @@ async function openSession(id) {
   state.projectName = s.projectName || "";
   state.respTarget = s.respTarget ?? null;
   state.mergedFrom = s.mergedFrom || [];
+  state.mergedIds = new Set(s.mergedIds || []);
+  state._preMerge = null;
   state.sessionId = s.id;
   state.reportExtraIds = new Set();
   bumpDataVersion();
@@ -2107,6 +2178,7 @@ function init() {
   $("#loginRole").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
   $("#btnSwitchUser").onclick = showLogin;
   $("#btnMerge").onclick = openMergeModal;
+  $("#btnUnmerge").onclick = undoMerge;
   purgeOldSessions().then(renderHistoryHome);
   refreshIcons();
 }
