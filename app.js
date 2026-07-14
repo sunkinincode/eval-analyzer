@@ -79,7 +79,9 @@ const state = {
   headers: [],
   rows: [],          // array ของ array (ตามคอลัมน์)
   columns: [],       // { i, header, type, group, item }
-  statusColIdx: -1,
+  statusColIdx: -1,   // (คงไว้เพื่อความเข้ากันได้ — ใช้ filterCols เป็นหลัก)
+  filterCols: [],     // คอลัมน์ที่ใช้เป็นตัวกรอง (ชุดแบบประเมิน, สถานะผู้ตอบ)
+  filterSel: {},      // ค่าที่เลือกของแต่ละตัวกรอง (colIdx → ค่า หรือ null = ทั้งหมด)
   filterValue: null, // null = ทั้งหมด
   activeTab: "dashboard",
   charts: [],        // Chart instances ของแท็บที่แสดงอยู่
@@ -92,7 +94,91 @@ const state = {
   respTarget: null,  // จำนวนกลุ่มเป้าหมาย/แบบที่แจก — ใช้คำนวณอัตราการตอบกลับ
   reportExtraIds: new Set(), // id ประวัติของแบบประเมินอื่นที่เลือกมารวมในเล่มเดียว
   _extraCache: {},           // ข้อมูลชุดอื่นที่โหลดมาแล้ว (id → dataset)
+  mergedFrom: [],            // ชื่อชุดข้อมูลที่ถูกผนวกเข้ากับชุดปัจจุบัน (ระดับแอป)
 };
+
+/* ============================================================
+   ผนวกชุดข้อมูล (ระดับแอป) — รวมแบบประเมินหลายชุดให้วิเคราะห์ด้วยกันทุกหน้า
+   ============================================================ */
+
+/** คอลัมน์สังเคราะห์ "ชุดแบบประเมิน" — บอกที่มาของแต่ละแถวหลังผนวก และใช้เป็นตัวกรองได้ */
+function ensureSourceColumn() {
+  let idx = state.headers.indexOf("ชุดแบบประเมิน");
+  if (idx >= 0) return idx;
+  idx = state.headers.length;
+  const mainLabel = state.fileName.replace(/\.(xlsx|xls|csv).*$/i, "");
+  state.headers.push("ชุดแบบประเมิน");
+  state.columns.push({ i: idx, header: "ชุดแบบประเมิน", type: "categorical", group: null, item: null });
+  state.rows.forEach((r) => { r[idx] = mainLabel; });
+  return idx;
+}
+
+/** ผนวกรายการจากประวัติเข้ากับชุดปัจจุบัน — หัวตารางตรงกันจับคู่คอลัมน์เดิม
+    หัวที่ไม่มีในชุดหลักต่อคอลัมน์ใหม่ให้ (กลายเป็นเคสเดียวกับฟอร์มแยกเส้นทางผู้ตอบ) */
+function mergeRecordIntoCurrent(rec) {
+  const srcIdx = ensureSourceColumn();
+  const dLabel = rec.fileName.replace(/\.(xlsx|xls|csv).*$/i, "");
+
+  // จับคู่คอลัมน์ของชุดที่ผนวกกับชุดหลักด้วยชื่อหัวตาราง
+  const map = rec.headers.map((h) => state.headers.indexOf(h));
+  rec.headers.forEach((h, j) => {
+    if (map[j] >= 0 || h === "ชุดแบบประเมิน") return;
+    const idx = state.headers.length;
+    const meta = rec.colTypes?.[j] || {};
+    state.headers.push(h);
+    state.columns.push({ i: idx, header: h, type: meta.type || "ignore", group: meta.group ?? null, item: meta.item ?? null });
+    map[j] = idx;
+  });
+
+  // เติมช่องว่างให้แถวเดิมตามความกว้างใหม่ แล้วเพิ่มแถวของชุดที่ผนวก
+  const width = state.headers.length;
+  state.rows.forEach((r) => { while (r.length < width) r.push(""); });
+  for (const rr of rec.rows) {
+    const nr = new Array(width).fill("");
+    rr.forEach((v, j) => { if (map[j] >= 0) nr[map[j]] = v; });
+    nr[srcIdx] = dLabel;
+    state.rows.push(nr);
+  }
+
+  state.mergedFrom.push(dLabel);
+  // เป้าหมายผู้ตอบ: รวมกันได้เมื่อรู้ทั้งสองฝั่ง ไม่งั้นถือว่าไม่ทราบ
+  state.respTarget = state.respTarget && rec.respTarget ? state.respTarget + rec.respTarget : null;
+  state.filterSel = {};
+  updateStatusCol();
+  bumpDataVersion();
+  saveSessionSnapshot();
+  updateFileMeta();
+  renderFilterBar();
+  renderActiveTab();
+  toast(`ผนวก "${dLabel.slice(0, 30)}" แล้ว — รวม ${state.rows.length} คำตอบ`);
+}
+
+/** modal เลือกชุดข้อมูลจากประวัติมาผนวก */
+async function openMergeModal() {
+  let sessions = [];
+  try { sessions = await dbGetAll("sessions"); } catch { /* noop */ }
+  sessions = sessions.filter((s) => s.id !== state.sessionId).sort((a, b) => b.savedAt - a.savedAt).slice(0, 10);
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.innerHTML = `<div class="modal modal-wide">
+    <h2><i data-lucide="layers"></i> ผนวกชุดข้อมูลเข้ากับไฟล์ปัจจุบัน</h2>
+    <p>ข้อมูลจะรวมเป็นชุดเดียวและวิเคราะห์ด้วยกันทุกหน้า พร้อมคอลัมน์ "ชุดแบบประเมิน" ไว้กรองแยกชุด — ไฟล์คนละแบบฟอร์มระบบจะต่อคอลัมน์ให้อัตโนมัติ</p>
+    ${sessions.length
+      ? sessions.map((s, i) => `
+        <div class="combine-item">
+          <b>${esc(s.projectName || s.fileName)}</b>
+          <span class="sugg-count">· ${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH")}</span>
+          <button class="btn small primary" data-merge="${i}" style="margin-left:auto"><i data-lucide="git-merge"></i> ผนวก</button>
+        </div>`).join("")
+      : `<p class="card-sub">ยังไม่มีชุดข้อมูลอื่นในประวัติ — อัปโหลดไฟล์ที่ต้องการผนวกก่อน (ระบบบันทึกอัตโนมัติ) แล้วค่อยกลับมากดผนวก</p>`}
+    <button class="btn" id="mergeClose" style="margin-top:12px">ปิด</button>
+  </div>`;
+  document.body.appendChild(ov);
+  refreshIcons();
+  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+  $("#mergeClose", ov).onclick = () => ov.remove();
+  $$("[data-merge]", ov).forEach((b) => (b.onclick = () => { mergeRecordIntoCurrent(sessions[+b.dataset.merge]); ov.remove(); }));
+}
 
 /** หาจำนวนกลุ่มเป้าหมาย (ผู้เข้าร่วม/แบบที่แจก) จากชีตสรุปอื่น ๆ ในไฟล์ ถ้ามี
     — ต้องเป็นแถวที่พูดถึง "จำนวน...เข้าร่วม/แจก" และค่าต้องเป็นจำนวนเต็ม ≥ จำนวนผู้ตอบ */
@@ -216,6 +302,7 @@ async function saveSessionSnapshot() {
       sheetName: state.sheetName,
       projectName: state.projectName,
       respTarget: state.respTarget,
+      mergedFrom: state.mergedFrom,
       headers: state.headers,
       rows: state.rows,
       colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item })),
@@ -316,12 +403,13 @@ function loadSheet(sheetName, opts = {}) {
   // นับเป็นผู้ตอบเฉพาะแถวที่มีคำตอบจริง — ไฟล์กรอกมือมักมีแถวเทมเพลตที่พิมพ์เลขลำดับรอไว้
   const usedIdx = state.columns.filter((c) => c.type !== "ignore").map((c) => c.i);
   state.rows = state.rows.filter((r) => usedIdx.some((i) => String(r[i]).trim() !== ""));
-  state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
-  state.filterValue = null;
+  updateStatusCol();
+  state.filterSel = {};
   state.projectName = opts.projectName ?? state.projectName;
   state.activeTab = "dashboard";
   if (!opts.fromHistory) state.respTarget = scanRespondTarget(state.workbook, sheetName, state.rows.length);
   state.reportExtraIds = new Set();
+  state.mergedFrom = [];
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -329,7 +417,7 @@ function loadSheet(sheetName, opts = {}) {
   $("#workspace").classList.remove("hidden");
   $("#fileInfo").classList.remove("hidden");
   $("#fileName").textContent = state.fileName;
-  $("#fileMeta").textContent = `${state.rows.length} คำตอบ · ${state.headers.length} คอลัมน์`;
+  updateFileMeta();
   renderFilterBar();
   switchTab("dashboard");
   toast(`โหลดข้อมูลแล้ว ${state.rows.length} คำตอบ`);
@@ -404,9 +492,31 @@ function detectColumns(headers, rows, bands = null) {
 /* ============================================================
    การกรองข้อมูล + สถิติ
    ============================================================ */
+function updateStatusCol() {
+  const cols = [];
+  const src = state.columns.findIndex((c) => c.header === "ชุดแบบประเมิน");
+  if (src >= 0) cols.push(src);
+  const st = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  if (st >= 0 && st !== src) cols.push(st);
+  state.filterCols = cols;
+  state.statusColIdx = st >= 0 ? st : src;
+  for (const k of Object.keys(state.filterSel)) if (!cols.includes(+k)) delete state.filterSel[k];
+}
+
+/** ข้อความสรุปตัวกรองที่เลือกอยู่ (ว่าง = ไม่ได้กรอง) */
+function activeFilterText() {
+  return state.filterCols.map((i) => state.filterSel[i]).filter(Boolean).join(" · ");
+}
+
+function updateFileMeta() {
+  $("#fileMeta").textContent = `${state.rows.length} คำตอบ · ${state.headers.length} คอลัมน์` +
+    (state.mergedFrom?.length ? ` · ผนวกแล้ว ${state.mergedFrom.length + 1} ชุด` : "");
+}
+
 function filteredRows() {
-  if (state.filterValue == null || state.statusColIdx < 0) return state.rows;
-  return state.rows.filter((r) => String(r[state.statusColIdx]).trim() === state.filterValue);
+  const active = Object.entries(state.filterSel).filter(([, v]) => v != null);
+  if (!active.length) return state.rows;
+  return state.rows.filter((r) => active.every(([i, v]) => String(r[+i]).trim() === v));
 }
 
 /** สถิติจากค่าคะแนนที่แปลงเป็นตัวเลข 1–5 แล้ว */
@@ -451,7 +561,7 @@ function analyzeDataset(rows, columns) {
 }
 
 function computeAnalysis() {
-  const key = `${_dataVersion}|${state.filterValue ?? "\0"}`;
+  const key = `${_dataVersion}|${state.filterCols.map((i) => `${i}=${state.filterSel[i] ?? ""}`).join("|")}`;
   if (_analysis && _analysisKey === key) return _analysis;
   _analysis = analyzeDataset(filteredRows(), state.columns);
   _analysisKey = key;
@@ -829,21 +939,29 @@ async function copyChartPNG(cfg, width, height) {
 function renderFilterBar() {
   const bar = $("#filterBar");
   bar.innerHTML = "";
-  if (state.statusColIdx < 0) return;
-  const { entries, total } = catFreq(state.rows, state.statusColIdx);
-  const label = document.createElement("span");
-  label.className = "label";
-  label.textContent = "กรองตามผู้ตอบ:";
-  bar.appendChild(label);
-  const mk = (text, val) => {
-    const b = document.createElement("button");
-    b.className = "chip" + ((state.filterValue ?? null) === val ? " active" : "");
-    b.textContent = text;
-    b.onclick = () => { state.filterValue = val; renderFilterBar(); renderActiveTab(); };
-    bar.appendChild(b);
-  };
-  mk(`ทั้งหมด (${total})`, null);
-  entries.forEach((e) => mk(`${e.label} (${e.n})`, e.label));
+  if (!state.filterCols.length) return;
+  state.filterCols.forEach((colIdx) => {
+    const col = state.columns[colIdx];
+    const { entries, total } = catFreq(state.rows, colIdx);
+    if (!entries.length) return;
+    const row = document.createElement("div");
+    row.className = "filter-row";
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = (col.header === "ชุดแบบประเมิน" ? "ชุดแบบประเมิน:" : "กรองตามผู้ตอบ:");
+    row.appendChild(label);
+    const mk = (text, val) => {
+      const b = document.createElement("button");
+      b.className = "chip" + ((state.filterSel[colIdx] ?? null) === val ? " active" : "");
+      b.textContent = text;
+      b.title = text;
+      b.onclick = () => { state.filterSel[colIdx] = val; renderFilterBar(); renderActiveTab(); };
+      row.appendChild(b);
+    };
+    mk(`ทั้งหมด (${total})`, null);
+    entries.forEach((e) => mk(`${e.label.length > 26 ? e.label.slice(0, 26) + "…" : e.label} (${e.n})`, e.label));
+    bar.appendChild(row);
+  });
 }
 
 function switchTab(name) {
@@ -889,7 +1007,7 @@ function renderDashboard(panel, rows) {
   hero.className = "hero-band";
   hero.innerHTML = `
     <div class="hero-left">
-      <div class="hero-label"><i data-lucide="sparkles"></i> ผลการประเมินโดยรวม${state.filterValue ? ` · ${esc(state.filterValue)}` : ""}</div>
+      <div class="hero-label"><i data-lucide="sparkles"></i> ผลการประเมินโดยรวม${activeFilterText() ? ` · ${esc(activeFilterText())}` : ""}</div>
       <div class="hero-score">${f2(overall.mean)}<span class="hero-outof">/ 5</span></div>
       <div class="hero-meta">${levelChip(overall.mean)}<span>S.D. ${f2(overall.sd)}</span><span>ผู้ตอบ ${rows.length} คน · ${overall.n} คำตอบ</span></div>
       <div class="hero-resp">
@@ -911,7 +1029,7 @@ function renderDashboard(panel, rows) {
   if (!overall.n) {
     const note = document.createElement("div");
     note.className = "card";
-    note.innerHTML = `<h3><i data-lucide="info"></i> ไม่มีคำตอบแบบคะแนน${state.filterValue ? `ในกลุ่ม "${esc(state.filterValue)}"` : "ในไฟล์นี้"}</h3>
+    note.innerHTML = `<h3><i data-lucide="info"></i> ไม่มีคำตอบแบบคะแนน${activeFilterText() ? `ในกลุ่ม "${esc(activeFilterText())}"` : "ในไฟล์นี้"}</h3>
       <p class="card-sub" style="margin:6px 0 0">กลุ่มผู้ตอบนี้อาจไม่ได้รับชุดคำถามแบบคะแนน 1–5 — ลองดูแท็บ "ข้อมูลผู้ตอบ" หรือ "ข้อเสนอแนะ" หรือเปลี่ยนตัวกรองด้านบน</p>`;
     panel.appendChild(note);
   }
@@ -983,7 +1101,7 @@ function renderDashboard(panel, rows) {
   grid.className = "grid-2";
   panel.appendChild(grid);
 
-  if (state.statusColIdx >= 0 && !state.filterValue) {
+  if (state.statusColIdx >= 0 && !activeFilterText()) {
     const { entries } = catFreq(rows, state.statusColIdx);
     const card = cardEl(grid, "ผู้ตอบแบบสอบถามจำแนกตามสถานะ", "จำนวน (ร้อยละ)");
     const cfg = cfgCountBar(entries.map((e) => e.label), entries.map((e) => e.n), t,
@@ -1053,7 +1171,7 @@ function renderSections(panel, rows) {
     const hidden = g.items.length - items.length;
     const card = cardEl(panel, g.name,
       `ผู้ตอบ ${Math.max(...items.map((it) => it.stats.n))} คน · ค่าเฉลี่ยรวม ${f2(g.total.mean)} (${levelLabel(g.total.mean)})` +
-      (hidden ? ` · ซ่อน ${hidden} ข้อที่ไม่มีผู้ตอบ${state.filterValue ? "ในกลุ่มนี้" : ""}` : ""));
+      (hidden ? ` · ซ่อน ${hidden} ข้อที่ไม่มีผู้ตอบ${activeFilterText() ? "ในกลุ่มนี้" : ""}` : ""));
 
     // ตาราง — เรียงเอาผลสำคัญ (x̄ / S.D. / ระดับ) ไว้ก่อน ความถี่เป็นส่วนเสริม
     const showFreq = state.ui.showFreq;
@@ -1251,7 +1369,7 @@ function renderColumns(panel) {
         if (b) { col.item = b[2].trim(); col.group = b[1].trim() || unnamedGroupName(col.item); }
         else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = col.header; }
       }
-      state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+      updateStatusCol();
       bumpDataVersion();
       renderFilterBar();
       saveSessionSnapshot();
@@ -1325,9 +1443,8 @@ function assembleReportDatasets(mainRows) {
     if (!d) continue;
     if (JSON.stringify(d.headers) === JSON.stringify(state.headers)) {
       let extra = d.rows;
-      if (state.filterValue != null && state.statusColIdx >= 0) {
-        extra = extra.filter((r) => String(r[state.statusColIdx]).trim() === state.filterValue);
-      }
+      const act = Object.entries(state.filterSel).filter(([, v]) => v != null);
+      if (act.length) extra = extra.filter((r) => act.every(([i, v]) => String(r[+i]).trim() === v));
       main.rows = main.rows.concat(extra);
       main.totalAll += d.rows.length;
       main.mergedFrom.push(d.label);
@@ -1347,7 +1464,7 @@ function buildReportBlocks(rows) {
   const num = { table: 0, chart: 0 };
   const projName = state.projectName.trim();
   const projText = projName ? `โครงการ${projName.replace(/^โครงการ/, "")}` : "โครงการ";
-  const filterNote = state.filterValue ? ` (เฉพาะกลุ่มผู้ตอบ: ${state.filterValue})` : "";
+  const filterNote = activeFilterText() ? ` (เฉพาะกลุ่ม: ${activeFilterText()})` : "";
 
   // ---------- หัวรายงาน ----------
   const totalResp = datasets.reduce((a, d) => a + d.rows.length, 0);
@@ -1558,7 +1675,7 @@ function renderReport(panel, rows) {
   const hint = document.createElement("p");
   hint.className = "card-sub";
   hint.style.margin = "0 0 12px";
-  hint.textContent = "ชี้เมาส์ที่แต่ละส่วนแล้วกด \"คัดลอกส่วนนี้\" หรือคัดลอกทั้งหมดแล้วไปวางใน Microsoft Word ได้เลย — เมื่อวางใน Word ตัวอักษรจะเป็น TH Sarabun 16pt และตัวเลขเป็นเลขอารบิกตามแบบเอกสารราชการ (พรีวิวหน้านี้แสดงด้วยฟอนต์ระบบ)" + (state.filterValue ? ` · กำลังใช้ตัวกรอง: ${state.filterValue}` : "");
+  hint.textContent = "ชี้เมาส์ที่แต่ละส่วนแล้วกด \"คัดลอกส่วนนี้\" หรือคัดลอกทั้งหมดแล้วไปวางใน Microsoft Word ได้เลย — เมื่อวางใน Word ตัวอักษรจะเป็น TH Sarabun 16pt และตัวเลขเป็นเลขอารบิกตามแบบเอกสารราชการ (พรีวิวหน้านี้แสดงด้วยฟอนต์ระบบ)" + (activeFilterText() ? ` · กำลังใช้ตัวกรอง: ${activeFilterText()}` : "");
   panel.appendChild(hint);
 
   // โครงการที่ใช้แบบประเมินหลายชุด: เลือกไฟล์อื่นจากประวัติมารวมในเล่มเดียว
@@ -1713,10 +1830,11 @@ async function openSession(id) {
   if (s.colTypes && s.colTypes.length === state.columns.length) {
     state.columns.forEach((c, i) => Object.assign(c, s.colTypes[i]));
   }
-  state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
-  state.filterValue = null;
+  updateStatusCol();
+  state.filterSel = {};
   state.projectName = s.projectName || "";
   state.respTarget = s.respTarget ?? null;
+  state.mergedFrom = s.mergedFrom || [];
   state.sessionId = s.id;
   state.reportExtraIds = new Set();
   bumpDataVersion();
@@ -1896,6 +2014,7 @@ function init() {
   $("#btnLogin").onclick = doLogin;
   $("#loginRole").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
   $("#btnSwitchUser").onclick = showLogin;
+  $("#btnMerge").onclick = openMergeModal;
   purgeOldSessions().then(renderHistoryHome);
   refreshIcons();
 }

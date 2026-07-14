@@ -21,9 +21,9 @@
 }
 
 :root {
-  --page: #f4f3ef;
+  --page: #f2f2ec;
   --surface-1: #ffffff;
-  --surface-2: #faf9f6;
+  --surface-2: #f8f8f3;
   --text-primary: #16161a;
   --text-secondary: #55544f;
   --muted: #8f8d85;
@@ -31,12 +31,12 @@
   --axis: #d6d4cb;
   --border: rgba(22, 22, 26, 0.08);
   --series-1: #2a78d6;
-  --accent: #2a78d6;
-  --accent-2: #4f46c9;
-  --accent-grad: linear-gradient(135deg, #2a78d6 0%, #4f46c9 100%);
-  --accent-soft: rgba(42, 120, 214, 0.10);
-  --glow: rgba(42, 120, 214, 0.10);
-  --glow-2: rgba(79, 70, 201, 0.07);
+  --accent: #0c8a5e;
+  --accent-2: #0b6e64;
+  --accent-grad: linear-gradient(135deg, #12a877 0%, #0b6e64 100%);
+  --accent-soft: rgba(16, 158, 106, 0.11);
+  --glow: rgba(16, 158, 106, 0.10);
+  --glow-2: rgba(11, 110, 100, 0.07);
   --shadow-card: 0 1px 2px rgba(22, 22, 26, 0.03), 0 10px 28px -14px rgba(22, 22, 26, 0.14);
   --shadow-pop: 0 18px 50px -18px rgba(22, 22, 26, 0.28);
   --lk5: #256abf;
@@ -46,28 +46,28 @@
   --lk1: #e34948;
   --good: #006300;
   --paper: #ffffff;
-  --r: 20px;
+  --r: 22px;
 }
 /* โหมดมืด — ใช้เมื่อ (1) ระบบเป็นมืดและผู้ใช้ไม่ได้บังคับสว่าง หรือ (2) ผู้ใช้บังคับมืด
    ค่าโทเคนสองบล็อกนี้ต้องเหมือนกันเสมอ (CSS ไม่มีตัวแปรร่วมสำหรับ selector คนละเงื่อนไข) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --page: #0a0b11;
-    --surface-1: #13151d;
-    --surface-2: #181a24;
+    --page: #060808;
+    --surface-1: #101514;
+    --surface-2: #151b19;
     --text-primary: #f2f2f5;
     --text-secondary: #b9bac4;
     --muted: #83848f;
-    --grid: #262833;
-    --axis: #363844;
+    --grid: #232b28;
+    --axis: #32403b;
     --border: rgba(255, 255, 255, 0.075);
     --series-1: #3987e5;
-    --accent: #4b95ec;
-    --accent-2: #7c74e8;
-    --accent-grad: linear-gradient(135deg, #3987e5 0%, #6a5fe0 100%);
-    --accent-soft: rgba(76, 139, 230, 0.14);
-    --glow: rgba(57, 135, 229, 0.16);
-    --glow-2: rgba(124, 116, 232, 0.12);
+    --accent: #3ad594;
+    --accent-2: #2dd4bf;
+    --accent-grad: linear-gradient(135deg, #34d399 0%, #0d9488 100%);
+    --accent-soft: rgba(52, 211, 153, 0.13);
+    --glow: rgba(52, 211, 153, 0.12);
+    --glow-2: rgba(13, 148, 136, 0.10);
     --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 14px 34px -16px rgba(0, 0, 0, 0.55);
     --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
     --lk5: #3987e5;
@@ -79,22 +79,22 @@
   }
 }
 :root[data-theme="dark"] {
-  --page: #0a0b11;
-  --surface-1: #13151d;
-  --surface-2: #181a24;
+  --page: #060808;
+  --surface-1: #101514;
+  --surface-2: #151b19;
   --text-primary: #f2f2f5;
   --text-secondary: #b9bac4;
   --muted: #83848f;
-  --grid: #262833;
-  --axis: #363844;
+  --grid: #232b28;
+  --axis: #32403b;
   --border: rgba(255, 255, 255, 0.075);
   --series-1: #3987e5;
-  --accent: #4b95ec;
-  --accent-2: #7c74e8;
-  --accent-grad: linear-gradient(135deg, #3987e5 0%, #6a5fe0 100%);
-  --accent-soft: rgba(76, 139, 230, 0.14);
-  --glow: rgba(57, 135, 229, 0.16);
-  --glow-2: rgba(124, 116, 232, 0.12);
+  --accent: #3ad594;
+  --accent-2: #2dd4bf;
+  --accent-grad: linear-gradient(135deg, #34d399 0%, #0d9488 100%);
+  --accent-soft: rgba(52, 211, 153, 0.13);
+  --glow: rgba(52, 211, 153, 0.12);
+  --glow-2: rgba(13, 148, 136, 0.10);
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 14px 34px -16px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
   --lk5: #3987e5;
@@ -588,3 +588,18 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
   .paper { position: absolute; left: 0; top: 0; box-shadow: none; border: none; max-width: none; width: 100%; padding: 0; }
   .blk-copy { display: none !important; }
 }
+
+/* ===== ลุคพรีเมียม (redesign เขียวมรกต) ===== */
+.topbar h1 {
+  background: var(--accent-grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  width: fit-content;
+}
+.card, .tile, .sdg-card, .hint-card {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 24%);
+}
+.modal-wide { max-width: 560px; }
+
+/* ตัวกรองหลายชั้น */
+.filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.filter-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
