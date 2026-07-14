@@ -90,6 +90,8 @@ const state = {
   sessionId: null,   // id ของรายการประวัติที่กำลังทำงานอยู่
   theme: "auto",     // auto | light | dark
   respTarget: null,  // จำนวนกลุ่มเป้าหมาย/แบบที่แจก — ใช้คำนวณอัตราการตอบกลับ
+  reportExtraIds: new Set(), // id ประวัติของแบบประเมินอื่นที่เลือกมารวมในเล่มเดียว
+  _extraCache: {},           // ข้อมูลชุดอื่นที่โหลดมาแล้ว (id → dataset)
 };
 
 /** หาจำนวนกลุ่มเป้าหมาย (ผู้เข้าร่วม/แบบที่แจก) จากชีตสรุปอื่น ๆ ในไฟล์ ถ้ามี
@@ -319,6 +321,7 @@ function loadSheet(sheetName, opts = {}) {
   state.projectName = opts.projectName ?? state.projectName;
   state.activeTab = "dashboard";
   if (!opts.fromHistory) state.respTarget = scanRespondTarget(state.workbook, sheetName, state.rows.length);
+  state.reportExtraIds = new Set();
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -427,13 +430,10 @@ let _analysisKey = null;
 let _analysis = null;
 function bumpDataVersion() { _dataVersion++; _analysisKey = null; _analysis = null; }
 
-function computeAnalysis() {
-  const key = `${_dataVersion}|${state.filterValue ?? "\0"}`;
-  if (_analysis && _analysisKey === key) return _analysis;
-  const rows = filteredRows();
-
+/** วิเคราะห์ชุดข้อมูลใด ๆ (pure) — ใช้ทั้งชุดปัจจุบันและแบบประเมินอื่นที่ดึงมารวมเล่ม */
+function analyzeDataset(rows, columns) {
   // กลุ่มคำถามคะแนน — แปลงค่าแต่ละคอลัมน์ครั้งเดียว แล้ว pool ต่อจากค่าที่แปลงแล้ว
-  const cols = state.columns.filter((c) => c.type === "rating");
+  const cols = columns.filter((c) => c.type === "rating");
   const names = [...new Set(cols.map((c) => c.group))];
   const groups = names.map((name) => {
     const items = cols.filter((c) => c.group === name).map((c) => {
@@ -446,9 +446,14 @@ function computeAnalysis() {
   }).filter((g) => g.items.some((it) => it.stats.n > 0));
 
   const overall = statsFromVals(groups.flatMap((g) => g._vals));
-  const sdgs = computeSdgs(rows);
+  const sdgs = computeSdgs(rows, columns);
+  return { groups, overall, sdgs };
+}
 
-  _analysis = { groups, overall, sdgs };
+function computeAnalysis() {
+  const key = `${_dataVersion}|${state.filterValue ?? "\0"}`;
+  if (_analysis && _analysisKey === key) return _analysis;
+  _analysis = analyzeDataset(filteredRows(), state.columns);
   _analysisKey = key;
   return _analysis;
 }
@@ -479,8 +484,8 @@ const SDG_NAMES = {
   17: "หุ้นส่วนเพื่อการพัฒนาที่ยั่งยืน",
 };
 
-function computeSdgs(rows) {
-  return state.columns.filter((c) => c.type === "sdg").map((c) => {
+function computeSdgs(rows, columns = state.columns) {
+  return columns.filter((c) => c.type === "sdg").map((c) => {
     let agree = 0, n = 0;
     for (const r of rows) {
       const v = String(r[c.i]).trim();
@@ -944,6 +949,36 @@ function renderDashboard(panel, rows) {
     mountChart(card, cfg, Math.max(170, labels.length * 54 + 40));
   }
 
+  // แผนที่ความถี่ (heatmap) — จำนวนผู้ตอบแต่ละระดับคะแนน รายข้อ สีเข้ม = คนมาก
+  if (groups.length) {
+    const hm = cardEl(panel, "แผนที่ความถี่ของคะแนน", "แต่ละช่องคือจำนวนผู้ตอบของระดับคะแนนนั้น (สีเข้ม = คนมาก) — ชี้ที่ช่องเพื่อดูรายละเอียด", "grid-3x3");
+    // ramp สีน้ำเงินแบบ sequential (โทนเดียว อ่อน→เข้ม) จากชุดสีมาตรฐาน
+    const seq = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#1c5cab", "#104281"];
+    let maxN = 1;
+    groups.forEach((g) => g.items.forEach((it) => [5, 4, 3, 2, 1].forEach((lv) => { maxN = Math.max(maxN, it.stats.freq[lv]); })));
+    const body = groups.map((g) => {
+      const items = g.items.filter((it) => it.stats.n > 0);
+      if (!items.length) return "";
+      return `<div class="hm-group">${esc(g.name)}</div>` + items.map((it) => `
+        <div class="hm-row">
+          <span class="hm-name" title="${esc(it.label)}">${esc(it.label)}</span>
+          ${[5, 4, 3, 2, 1].map((lv) => {
+            const n = it.stats.freq[lv];
+            const ci = n === 0 ? -1 : Math.min(seq.length - 1, Math.round((n / maxN) * (seq.length - 1)));
+            const style = ci < 0 ? "" : `background:${seq[ci]};border-color:transparent;color:${ci >= 3 ? "#fff" : "#0d366b"}`;
+            const pct = it.stats.n ? ((n / it.stats.n) * 100).toFixed(1) : "0.0";
+            return `<span class="hm-cell" style="${style}" title="${esc(it.label)}\nคะแนน ${lv}: ${n} คน (${pct}%)">${n || ""}</span>`;
+          }).join("")}
+        </div>`).join("");
+    }).join("");
+    hm.insertAdjacentHTML("beforeend", `
+      <div class="hm-wrap">
+        <div class="hm-row hm-head"><span class="hm-name"></span>${[5, 4, 3, 2, 1].map((lv) => `<span class="hm-col">${lv}</span>`).join("")}</div>
+        ${body}
+      </div>
+      <p class="card-sub" style="margin:10px 0 0">ระดับคะแนน: 5 = มากที่สุด … 1 = ควรปรับปรุง</p>`);
+  }
+
   const grid = document.createElement("div");
   grid.className = "grid-2";
   panel.appendChild(grid);
@@ -1268,23 +1303,102 @@ function wTable(headCells, bodyRows) {
 }
 const cell = (html, align, bold) => ({ html, align, bold });
 
+/** สร้างชุดข้อมูลจากรายการในประวัติ (สำหรับรวมหลายแบบประเมินในเล่มเดียว) */
+function datasetFromRecord(s) {
+  const columns = s.headers.map((h, i) => ({ i, header: h, group: null, item: null, ...(s.colTypes?.[i] || { type: "ignore" }) }));
+  // ชื่อส่วนในรายงานใช้ชื่อไฟล์ — โครงการเดียวกันมักหลายไฟล์ ชื่อโครงการจะซ้ำกันจนแยกไม่ออก
+  return { label: s.fileName.replace(/\.(xlsx|xls|csv).*$/i, ""), headers: s.headers, rows: s.rows, columns, respTarget: s.respTarget ?? null };
+}
+
+/** ประกอบชุดข้อมูลของรายงาน: ชุดหลัก + แบบประเมินอื่นที่เลือกจากประวัติ
+    — ไฟล์ที่หัวตารางเหมือนกัน = ข้อมูลชุดเดียวกันที่แยกไฟล์ → รวมแถวเข้าชุดหลัก */
+function assembleReportDatasets(mainRows) {
+  const main = {
+    key: "main",
+    label: state.fileName.replace(/\.(xlsx|xls|csv).*$/i, ""),
+    rows: mainRows, columns: state.columns,
+    respTarget: state.respTarget, totalAll: state.rows.length, mergedFrom: [],
+  };
+  const parts = [main];
+  for (const id of state.reportExtraIds) {
+    const d = state._extraCache[id];
+    if (!d) continue;
+    if (JSON.stringify(d.headers) === JSON.stringify(state.headers)) {
+      let extra = d.rows;
+      if (state.filterValue != null && state.statusColIdx >= 0) {
+        extra = extra.filter((r) => String(r[state.statusColIdx]).trim() === state.filterValue);
+      }
+      main.rows = main.rows.concat(extra);
+      main.totalAll += d.rows.length;
+      main.mergedFrom.push(d.label);
+    } else {
+      parts.push({ key: "x" + id, label: d.label, rows: d.rows, columns: d.columns, respTarget: d.respTarget, totalAll: d.rows.length, mergedFrom: [] });
+    }
+  }
+  parts.forEach((ds) => { ds.analysis = analyzeDataset(ds.rows, ds.columns); });
+  return parts;
+}
+
 function buildReportBlocks(rows) {
+  const datasets = assembleReportDatasets(rows);
+  const multi = datasets.length > 1;
+  const rk = state.reportExtraIds.size ? [...state.reportExtraIds].join(",") : "solo"; // กันแคชรูปกราฟชนกันระหว่างชุดผสม
   const blocks = [];
-  let tableNo = 0, chartNo = 0;
+  const num = { table: 0, chart: 0 };
   const projName = state.projectName.trim();
   const projText = projName ? `โครงการ${projName.replace(/^โครงการ/, "")}` : "โครงการ";
   const filterNote = state.filterValue ? ` (เฉพาะกลุ่มผู้ตอบ: ${state.filterValue})` : "";
 
   // ---------- หัวรายงาน ----------
+  const totalResp = datasets.reduce((a, d) => a + d.rows.length, 0);
+  let intro;
+  if (multi) {
+    intro = `การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบประเมินจำนวน ${datasets.length} ชุด ได้แก่ ${datasets.map((d, i) => `(${i + 1}) ${esc(d.label)} มีผู้ตอบ ${d.rows.length} คน`).join(" ")} รวมผู้ตอบทั้งสิ้น <b>${totalResp}</b> คน${esc(filterNote)} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`;
+  } else {
+    const d = datasets[0];
+    intro = `การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบสอบถาม มีผู้ตอบแบบสอบถามทั้งสิ้น <b>${d.rows.length}</b> คน${esc(filterNote)}${d.mergedFrom.length ? ` (รวมข้อมูลจาก ${d.mergedFrom.length + 1} ไฟล์)` : ""}${d.respTarget ? ` จากกลุ่มเป้าหมาย ${d.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((d.totalAll / d.respTarget) * 100).toFixed(2)}` : ""} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`;
+  }
   blocks.push({
     title: "หัวรายงาน",
     html:
       `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการวิเคราะห์ข้อมูลแบบประเมินผลการดำเนินการ${esc(projText)}</p>` +
-      wp(`การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบสอบถาม มีผู้ตอบแบบสอบถามทั้งสิ้น <b>${rows.length}</b> คน${esc(filterNote)}${state.respTarget ? ` จากกลุ่มเป้าหมาย ${state.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((state.rows.length / state.respTarget) * 100).toFixed(2)}` : ""} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`),
+      wp(intro),
   });
 
+  // ---------- เนื้อหารายชุดข้อมูล (เลขตาราง/แผนภูมิต่อเนื่องกันทั้งเล่ม) ----------
+  datasets.forEach((ds, di) => {
+    if (multi) {
+      const respLine = ds.respTarget
+        ? `แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน จากกลุ่มเป้าหมาย ${ds.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((ds.totalAll / ds.respTarget) * 100).toFixed(2)}`
+        : `แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน`;
+      blocks.push({
+        title: `ส่วนที่ ${di + 1}: ${ds.label}`,
+        html: `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin-top:14pt;">ส่วนที่ ${di + 1}  ${esc(ds.label)}</p>` + wp(respLine),
+      });
+    }
+    blocks.push(...datasetBlocks(ds, num, rk));
+  });
+
+  // ---------- หมายเหตุเกณฑ์ ----------
+  if (datasets.some((d) => d.analysis.groups.length)) {
+    blocks.push({
+      title: "หมายเหตุเกณฑ์การแปลผล",
+      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} และแปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
+    });
+  }
+  return blocks;
+}
+
+/** บล็อกรายงาน (ตอนที่ 1–4) ของชุดข้อมูลหนึ่งชุด — เลขตาราง/แผนภูมิรับต่อจาก num */
+function datasetBlocks(ds, num, rk) {
+  const rows = ds.rows;
+  const columns = ds.columns;
+  const { groups: dsGroups, overall: dsOverall, sdgs: dsSdgs } = ds.analysis;
+  const blocks = [];
+  let tableNo = num.table, chartNo = num.chart;
+
   // ---------- ตอนที่ 1 ข้อมูลทั่วไป ----------
-  const catCols = state.columns.filter((c) => c.type === "categorical");
+  const catCols = columns.filter((c) => c.type === "categorical");
   const catBlocksHtml = [];
   catCols.forEach((c) => {
     const { entries, total } = catFreq(rows, c.i);
@@ -1312,7 +1426,7 @@ function buildReportBlocks(rows) {
   }
 
   // ---------- ตอนที่ 2 ผลการประเมิน ----------
-  const groups = ratingGroups(rows);
+  const groups = dsGroups;
   if (groups.length) {
     const partHtml = [wp("<b>ตอนที่ 2  ผลการประเมินโครงการ</b>", { indent: false, align: "left" })];
 
@@ -1347,7 +1461,7 @@ function buildReportBlocks(rows) {
 
       if (state.reportOpts.charts) {
         chartNo++;
-        const url = cachedChartURL("grp|" + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
+        const url = cachedChartURL(`${rk}|${ds.key}|grp|` + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
         html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
         html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ค่าเฉลี่ยผลการประเมิน${esc(g.name)}</p>`;
       }
@@ -1357,7 +1471,7 @@ function buildReportBlocks(rows) {
     // ตารางสรุปรวมทุกด้าน
     if (groups.length > 1) {
       tableNo++;
-      const overall = overallRatingStats(rows);
+      const overall = dsOverall;
       let html = wCaption(tableNo, `สรุปผลการประเมินโดยรวมทุกด้าน`);
       html += wTable(
         ["ด้านการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"],
@@ -1367,10 +1481,10 @@ function buildReportBlocks(rows) {
         ]
       );
       const sortedG = [...groups].sort((a, b) => b.total.mean - a.total.mean);
-      html += wp(`จากตารางที่ ${tableNo} พบว่า ผลการประเมินโครงการโดยรวมทุกด้านอยู่ในระดับ${levelLabel(overallRatingStats(rows).mean)} (x̄ = ${f2(overallRatingStats(rows).mean)}, S.D. = ${f2(overallRatingStats(rows).sd)}) โดยด้านที่มีค่าเฉลี่ยสูงสุด คือ ${esc(sortedG[0].name)} (x̄ = ${f2(sortedG[0].total.mean)}) และด้านที่มีค่าเฉลี่ยต่ำสุด คือ ${esc(sortedG[sortedG.length - 1].name)} (x̄ = ${f2(sortedG[sortedG.length - 1].total.mean)})`);
+      html += wp(`จากตารางที่ ${tableNo} พบว่า ผลการประเมินโครงการโดยรวมทุกด้านอยู่ในระดับ${levelLabel(dsOverall.mean)} (x̄ = ${f2(dsOverall.mean)}, S.D. = ${f2(dsOverall.sd)}) โดยด้านที่มีค่าเฉลี่ยสูงสุด คือ ${esc(sortedG[0].name)} (x̄ = ${f2(sortedG[0].total.mean)}) และด้านที่มีค่าเฉลี่ยต่ำสุด คือ ${esc(sortedG[sortedG.length - 1].name)} (x̄ = ${f2(sortedG[sortedG.length - 1].total.mean)})`);
       if (state.reportOpts.charts) {
         chartNo++;
-        const url = cachedChartURL("summary", () => chartToDataURL(cfgMeanBar(groups.map((g) => g.name), groups.map((g) => g.total.mean), themeVars(true)), 860, Math.max(200, groups.length * 50 + 60)));
+        const url = cachedChartURL(`${rk}|${ds.key}|summary`, () => chartToDataURL(cfgMeanBar(groups.map((g) => g.name), groups.map((g) => g.total.mean), themeVars(true)), 860, Math.max(200, groups.length * 50 + 60)));
         html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
         html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;เปรียบเทียบค่าเฉลี่ยผลการประเมินรายด้าน</p>`;
       }
@@ -1380,7 +1494,7 @@ function buildReportBlocks(rows) {
   }
 
   // ---------- ตอนที่ 3 SDGs ----------
-  const sdgs = sdgResults(rows);
+  const sdgs = dsSdgs;
   if (sdgs.length) {
     tableNo++;
     let html = wp("<b>ตอนที่ 3  ความสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs)</b>", { indent: false, align: "left" });
@@ -1396,7 +1510,7 @@ function buildReportBlocks(rows) {
     html += wp(narr);
     if (state.reportOpts.charts) {
       chartNo++;
-      const url = cachedChartURL("sdg", () => {
+      const url = cachedChartURL(`${rk}|${ds.key}|sdg`, () => {
         const c = cfgCountBar(sdgs.map((s) => s.label), sdgs.map((s) => +s.pct.toFixed(1)), themeVars(true), { max: 100, suffix: "%", endLabels: sdgs.map((s) => s.pct.toFixed(1) + "%") });
         return chartToDataURL(c, 860, Math.max(200, sdgs.length * 52 + 60));
       });
@@ -1407,7 +1521,7 @@ function buildReportBlocks(rows) {
   }
 
   // ---------- ตอนที่ 4 ข้อเสนอแนะ ----------
-  const textCols = state.columns.filter((c) => c.type === "text");
+  const textCols = columns.filter((c) => c.type === "text");
   const textHtml = [];
   textCols.forEach((c) => {
     const answers = textAnswers(rows, c.i);
@@ -1423,13 +1537,8 @@ function buildReportBlocks(rows) {
     });
   }
 
-  // ---------- หมายเหตุเกณฑ์ ----------
-  if (groups.length) {
-    blocks.push({
-      title: "หมายเหตุเกณฑ์การแปลผล",
-      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} และแปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
-    });
-  }
+  num.table = tableNo;
+  num.chart = chartNo;
   return blocks;
 }
 
@@ -1451,6 +1560,43 @@ function renderReport(panel, rows) {
   hint.style.margin = "0 0 12px";
   hint.textContent = "ชี้เมาส์ที่แต่ละส่วนแล้วกด \"คัดลอกส่วนนี้\" หรือคัดลอกทั้งหมดแล้วไปวางใน Microsoft Word ได้เลย — เมื่อวางใน Word ตัวอักษรจะเป็น TH Sarabun 16pt และตัวเลขเป็นเลขอารบิกตามแบบเอกสารราชการ (พรีวิวหน้านี้แสดงด้วยฟอนต์ระบบ)" + (state.filterValue ? ` · กำลังใช้ตัวกรอง: ${state.filterValue}` : "");
   panel.appendChild(hint);
+
+  // โครงการที่ใช้แบบประเมินหลายชุด: เลือกไฟล์อื่นจากประวัติมารวมในเล่มเดียว
+  const combineBox = document.createElement("div");
+  panel.appendChild(combineBox);
+  (async () => {
+    let sessions = [];
+    try { sessions = await dbGetAll("sessions"); } catch { /* noop */ }
+    sessions = sessions.filter((s) => s.id !== state.sessionId).sort((a, b) => b.savedAt - a.savedAt).slice(0, 8);
+    if (!sessions.length) return;
+    const sameProj = (s) => s.projectName && state.projectName && s.projectName.trim() === state.projectName.trim();
+    sessions.sort((a, b) => (sameProj(b) ? 1 : 0) - (sameProj(a) ? 1 : 0));
+    combineBox.className = "card combine-card";
+    combineBox.innerHTML = `
+      <h3><i data-lucide="layers"></i> รวมหลายแบบประเมินในเล่มเดียว</h3>
+      <p class="card-sub">ติ๊กเลือกแบบประเมินอื่นจากประวัติเพื่อต่อท้ายรายงานนี้ (เลขตาราง/แผนภูมิต่อเนื่องกันทั้งเล่ม) — ไฟล์ที่หัวตารางเหมือนกันจะถูกรวมเป็นข้อมูลชุดเดียวโดยอัตโนมัติ</p>
+      ${sessions.map((s) => `
+        <label class="ck combine-item">
+          <input type="checkbox" data-sess="${s.id}" ${state.reportExtraIds.has(s.id) ? "checked" : ""}>
+          <b>${esc(s.projectName || s.fileName)}</b>
+          <span class="sugg-count">· ${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH")}</span>
+          ${sameProj(s) ? '<span class="lv l4">โครงการเดียวกัน</span>' : ""}
+        </label>`).join("")}`;
+    refreshIcons();
+    $$("input[data-sess]", combineBox).forEach((cb) => {
+      cb.onchange = () => {
+        const id = cb.dataset.sess;
+        if (cb.checked) {
+          const rec = sessions.find((s) => s.id === id);
+          state._extraCache[id] = datasetFromRecord(rec);
+          state.reportExtraIds.add(id);
+        } else {
+          state.reportExtraIds.delete(id);
+        }
+        renderActiveTab();
+      };
+    });
+  })();
 
   const paper = document.createElement("div");
   paper.className = "paper";
@@ -1572,6 +1718,7 @@ async function openSession(id) {
   state.projectName = s.projectName || "";
   state.respTarget = s.respTarget ?? null;
   state.sessionId = s.id;
+  state.reportExtraIds = new Set();
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));

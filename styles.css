@@ -452,6 +452,39 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
 .sdg-mini { display: flex; gap: 7px; flex-wrap: wrap; padding-top: 12px; }
 .sdg-mini img { width: 36px; height: 36px; border-radius: 9px; box-shadow: 0 4px 10px -4px rgba(0, 0, 0, 0.3); }
 
+/* ===== แผนที่ความถี่ (heatmap) ===== */
+.hm-wrap { max-height: 560px; overflow-y: auto; overflow-x: auto; padding-right: 4px; }
+.hm-row {
+  display: grid; grid-template-columns: minmax(150px, 1fr) repeat(5, 46px);
+  gap: 6px; align-items: center; margin-bottom: 6px; min-width: 420px;
+}
+.hm-head { position: sticky; top: 0; background: var(--surface-1); z-index: 2; padding: 2px 0; }
+.hm-col { text-align: center; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.hm-name {
+  font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;
+}
+.hm-cell {
+  height: 32px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: var(--surface-2); border: 1px solid var(--grid);
+  cursor: default; transition: transform 0.1s, box-shadow 0.1s;
+}
+.hm-cell:hover { transform: scale(1.14); box-shadow: var(--shadow-pop); z-index: 3; }
+.hm-group {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 6px;
+}
+.hm-group:first-of-type { margin-top: 4px; }
+
+/* ===== รวมหลายแบบประเมินในเล่มเดียว ===== */
+.combine-card { margin-bottom: 14px; }
+.combine-item { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--grid); font-size: 13.5px; cursor: pointer; }
+.combine-item:last-child { border-bottom: none; }
+.combine-item b { font-weight: 600; }
+.combine-item:hover { background: var(--accent-soft); border-radius: 8px; }
+
 .sdg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 14px; margin-bottom: 16px; }
 .sdg-card {
   display: flex; gap: 13px; align-items: center;
