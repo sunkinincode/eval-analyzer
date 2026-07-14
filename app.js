@@ -1154,7 +1154,7 @@ function renderDashboard(panel, rows) {
   if (groups.length) {
     const hm = cardEl(panel, "แผนที่ความถี่ของคะแนน", "สีเข้ม = ผู้ตอบมาก — ชี้ที่ช่องเพื่อดูจำนวนและร้อยละ", "grid-3x3");
     // ramp มรกต อ่อน→เข้ม (เน้นความสวยเข้าธีม ตัวเลขดูจาก tooltip)
-    const seq = ["#d9f4e7", "#abe8cf", "#79d8b1", "#47c391", "#23aa77", "#108b5f", "#076a48"];
+    const seq = ["#dbe6f5", "#b6cdec", "#8fb2e0", "#5f8fd2", "#3a6dbd", "#1f4f9e", "#123c78"];
     let maxN = 1;
     groups.forEach((g) => g.items.forEach((it) => [5, 4, 3, 2, 1].forEach((lv) => { maxN = Math.max(maxN, it.stats.freq[lv]); })));
     const body = groups.map((g) => {

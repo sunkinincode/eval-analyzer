@@ -1,307 +1,326 @@
 /* ============================================================
-   ธีม "โมเดิร์นแดชบอร์ด" — ฟอนต์ Anuphan + การ์ดโค้งมน + แสง glow
-   (ค่าสีข้อมูลอิงชุดสี dataviz reference palette เช่นเดิม)
+   ระบบวิเคราะห์ผลประเมินโครงการ — ธีม "PSU Navy Glass"
+   สีกรมท่า ม.อ. + กระจกฝ้า (glassmorphism) + เลย์เอาต์ลอย
+   ค่าสีข้อมูลกราฟ (--series-1, --lk*) คงชุดสีที่อ่านง่ายไว้
    ============================================================ */
 
 @font-face {
   font-family: "Anuphan";
   src: url("vendor/fonts/anuphan-thai.woff2") format("woff2");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 400 700; font-style: normal; font-display: swap;
   unicode-range: U+02D7, U+0303, U+0331, U+0E01-0E5B, U+200C-200D, U+25CC;
 }
 @font-face {
   font-family: "Anuphan";
   src: url("vendor/fonts/anuphan-latin.woff2") format("woff2");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 400 700; font-style: normal; font-display: swap;
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD;
 }
 
+/* ===== โหมดสว่าง ===== */
 :root {
-  --page: #f2f2ec;
-  --surface-1: #ffffff;
-  --surface-2: #f8f8f3;
-  --text-primary: #16161a;
-  --text-secondary: #55544f;
-  --muted: #8f8d85;
-  --grid: #eceae3;
-  --axis: #d6d4cb;
-  --border: rgba(22, 22, 26, 0.08);
-  --series-1: #2a78d6;
-  --accent: #0c8a5e;
-  --accent-2: #0b6e64;
-  --accent-grad: linear-gradient(135deg, #12a877 0%, #0b6e64 100%);
-  --accent-soft: rgba(16, 158, 106, 0.11);
-  --glow: rgba(16, 158, 106, 0.10);
-  --glow-2: rgba(11, 110, 100, 0.07);
-  --shadow-card: 0 1px 2px rgba(22, 22, 26, 0.03), 0 10px 28px -14px rgba(22, 22, 26, 0.14);
-  --shadow-pop: 0 18px 50px -18px rgba(22, 22, 26, 0.28);
-  --lk5: #256abf;
-  --lk4: #6da7ec;
-  --lk3: #dbdad3;
-  --lk2: #ef9392;
-  --lk1: #e34948;
-  --good: #006300;
+  --navy-900: #001737;
+  --navy-800: #002451;
+  --navy-700: #002f6c;   /* กรมท่า ม.อ. */
+  --navy-500: #1a54a6;
+  --navy-300: #4a86d6;
+
+  --page: #e8edf5;
+  --surface-1: #ffffff;                    /* สีทึบ (กราฟใช้) */
+  --surface-2: #eef2f8;
+  --glass-bg: rgba(255, 255, 255, 0.62);   /* พื้นการ์ดกระจก */
+  --glass-hi: rgba(255, 255, 255, 0.9);    /* เส้นไฮไลต์บนขอบ */
+  --glass-border: rgba(0, 47, 108, 0.12);
+  --glass-blur: 18px;
+
+  --text-primary: #0d1b30;
+  --text-secondary: #46566e;
+  --muted: #7d8ba0;
+  --grid: #dde5f0;
+  --axis: #c3cee0;
+  --border: rgba(0, 47, 108, 0.10);
+
+  --accent: #002f6c;
+  --accent-2: #1a54a6;
+  --accent-grad: linear-gradient(135deg, #1a54a6 0%, #002f6c 100%);
+  --accent-soft: rgba(26, 84, 166, 0.12);
+  --glow: rgba(26, 84, 166, 0.14);
+  --glow-2: rgba(0, 47, 108, 0.10);
+
+  --series-1: #1c5aa8;
+  --lk5: #123c78; --lk4: #4a86d6; --lk3: #cdd6e4; --lk2: #ef9392; --lk1: #d64545;
+  --good: #0a6b3f;
+
+  --shadow-card: 0 1px 1px rgba(0, 23, 55, 0.04), 0 14px 34px -18px rgba(0, 23, 55, 0.28);
+  --shadow-pop: 0 26px 60px -22px rgba(0, 23, 55, 0.42);
   --paper: #ffffff;
-  --r: 22px;
+  --r: 24px;
+  --r-sm: 14px;
+  --gap: 18px;
 }
-/* โหมดมืด — ใช้เมื่อ (1) ระบบเป็นมืดและผู้ใช้ไม่ได้บังคับสว่าง หรือ (2) ผู้ใช้บังคับมืด
-   ค่าโทเคนสองบล็อกนี้ต้องเหมือนกันเสมอ (CSS ไม่มีตัวแปรร่วมสำหรับ selector คนละเงื่อนไข) */
+
+/* ===== โหมดมืด (สองบล็อกต้องเหมือนกันเสมอ) ===== */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --page: #060808;
-    --surface-1: #101514;
-    --surface-2: #151b19;
-    --text-primary: #f2f2f5;
-    --text-secondary: #b9bac4;
-    --muted: #83848f;
-    --grid: #232b28;
-    --axis: #32403b;
-    --border: rgba(255, 255, 255, 0.075);
-    --series-1: #3987e5;
-    --accent: #3ad594;
-    --accent-2: #2dd4bf;
-    --accent-grad: linear-gradient(135deg, #34d399 0%, #0d9488 100%);
-    --accent-soft: rgba(52, 211, 153, 0.13);
-    --glow: rgba(52, 211, 153, 0.12);
-    --glow-2: rgba(13, 148, 136, 0.10);
-    --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 14px 34px -16px rgba(0, 0, 0, 0.55);
-    --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
-    --lk5: #3987e5;
-    --lk4: #9ec5f4;
-    --lk3: #4a4a52;
-    --lk2: #f0a8a7;
-    --lk1: #e66767;
-    --good: #0ca30c;
+    --page: #04070f;
+    --surface-1: #101a2e;
+    --surface-2: #142138;
+    --glass-bg: rgba(18, 30, 54, 0.55);
+    --glass-hi: rgba(120, 160, 225, 0.18);
+    --glass-border: rgba(120, 160, 225, 0.14);
+    --text-primary: #eef3fb;
+    --text-secondary: #a9b8d0;
+    --muted: #6f7f9b;
+    --grid: #1e2c46;
+    --axis: #2a3b5a;
+    --border: rgba(140, 175, 235, 0.10);
+    --accent: #5896e8;
+    --accent-2: #3f7fd8;
+    --accent-grad: linear-gradient(135deg, #5896e8 0%, #2f66c2 100%);
+    --accent-soft: rgba(88, 150, 232, 0.16);
+    --glow: rgba(63, 127, 216, 0.20);
+    --glow-2: rgba(20, 60, 140, 0.16);
+    --series-1: #4f8fe6;
+    --lk5: #2f66c2; --lk4: #7fb0ef; --lk3: #3a4a68; --lk2: #f0a8a7; --lk1: #e66767;
+    --good: #34c77e;
+    --shadow-card: 0 1px 0 rgba(140, 175, 235, 0.05) inset, 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+    --shadow-pop: 0 30px 70px -24px rgba(0, 0, 0, 0.8);
+    --paper: #ffffff;
   }
 }
 :root[data-theme="dark"] {
-  --page: #060808;
-  --surface-1: #101514;
-  --surface-2: #151b19;
-  --text-primary: #f2f2f5;
-  --text-secondary: #b9bac4;
-  --muted: #83848f;
-  --grid: #232b28;
-  --axis: #32403b;
-  --border: rgba(255, 255, 255, 0.075);
-  --series-1: #3987e5;
-  --accent: #3ad594;
-  --accent-2: #2dd4bf;
-  --accent-grad: linear-gradient(135deg, #34d399 0%, #0d9488 100%);
-  --accent-soft: rgba(52, 211, 153, 0.13);
-  --glow: rgba(52, 211, 153, 0.12);
-  --glow-2: rgba(13, 148, 136, 0.10);
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 14px 34px -16px rgba(0, 0, 0, 0.55);
-  --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
-  --lk5: #3987e5;
-  --lk4: #9ec5f4;
-  --lk3: #4a4a52;
-  --lk2: #f0a8a7;
-  --lk1: #e66767;
-  --good: #0ca30c;
+  --page: #04070f;
+  --surface-1: #101a2e;
+  --surface-2: #142138;
+  --glass-bg: rgba(18, 30, 54, 0.55);
+  --glass-hi: rgba(120, 160, 225, 0.18);
+  --glass-border: rgba(120, 160, 225, 0.14);
+  --text-primary: #eef3fb;
+  --text-secondary: #a9b8d0;
+  --muted: #6f7f9b;
+  --grid: #1e2c46;
+  --axis: #2a3b5a;
+  --border: rgba(140, 175, 235, 0.10);
+  --accent: #5896e8;
+  --accent-2: #3f7fd8;
+  --accent-grad: linear-gradient(135deg, #5896e8 0%, #2f66c2 100%);
+  --accent-soft: rgba(88, 150, 232, 0.16);
+  --glow: rgba(63, 127, 216, 0.20);
+  --glow-2: rgba(20, 60, 140, 0.16);
+  --series-1: #4f8fe6;
+  --lk5: #2f66c2; --lk4: #7fb0ef; --lk3: #3a4a68; --lk2: #f0a8a7; --lk1: #e66767;
+  --good: #34c77e;
+  --shadow-card: 0 1px 0 rgba(140, 175, 235, 0.05) inset, 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+  --shadow-pop: 0 30px 70px -24px rgba(0, 0, 0, 0.8);
+  --paper: #ffffff;
 }
 
 * { box-sizing: border-box; }
-
-/* ===== ไอคอน Lucide — ขนาดตามบริบท ===== */
-svg.lucide { width: 15px; height: 15px; stroke-width: 2; vertical-align: -2.5px; flex-shrink: 0; }
-.side-btn svg.lucide { width: 17px; height: 17px; }
-.logo-mark svg.lucide { width: 20px; height: 20px; color: #fff; }
-.dz-icon svg.lucide { width: 30px; height: 30px; color: #fff; }
-.t-icon svg.lucide { width: 20px; height: 20px; color: var(--accent); }
-.tile.hero .t-icon svg.lucide { color: #fff; }
-.hint-card b svg.lucide { width: 15px; height: 15px; color: var(--accent); margin-right: 4px; }
-.card h3 svg.lucide { width: 16px; height: 16px; color: var(--accent); margin-right: 4px; }
-.btn svg.lucide { width: 14px; height: 14px; }
-.modal h2 svg.lucide { width: 20px; height: 20px; color: var(--accent); vertical-align: -3px; }
-.user-chip svg.lucide { width: 13px; height: 13px; vertical-align: -2px; }
-.lv svg.lucide { width: 12px; height: 12px; vertical-align: -1.5px; stroke-width: 3; }
 html, body { margin: 0; padding: 0; }
 body {
+  min-height: 100vh;
   background:
-    radial-gradient(1100px 520px at 78% -12%, var(--glow), transparent 62%),
-    radial-gradient(900px 480px at -8% 22%, var(--glow-2), transparent 58%),
+    radial-gradient(1200px 640px at 82% -10%, var(--glow), transparent 60%),
+    radial-gradient(1000px 560px at -6% 12%, var(--glow-2), transparent 58%),
+    radial-gradient(900px 700px at 50% 120%, var(--accent-soft), transparent 62%),
     var(--page);
   background-attachment: fixed;
   color: var(--text-primary);
   font-family: "Anuphan", "Sarabun", "Leelawadee UI", "Thonburi", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.55;
+  letter-spacing: -0.004em;
 }
 ::selection { background: var(--accent-soft); }
-
-/* scrollbar บาง ๆ */
-::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* พื้นผิวกระจก (mixin ผ่าน utility) */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+}
+
 /* ============================================================
-   โครงหน้าแบบ sidebar
+   เลย์เอาต์: sidebar ลอยเป็นแผงกระจก + คอนเทนต์มีระยะหายใจ
    ============================================================ */
-.app-shell { display: flex; min-height: 100vh; }
+.app-shell { display: flex; gap: var(--gap); padding: var(--gap); min-height: 100vh; }
 
 .sidebar {
-  width: 244px; flex-shrink: 0;
-  background: color-mix(in srgb, var(--surface-1) 82%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  position: sticky; top: 0; height: 100vh;
+  width: 236px; flex-shrink: 0;
+  position: sticky; top: var(--gap);
+  height: calc(100vh - var(--gap) * 2);
+  border-radius: var(--r);
   padding: 20px 14px 16px;
+  display: flex; flex-direction: column;
   overflow-y: auto;
+  background: var(--glass-bg);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
 }
-.side-logo { display: flex; align-items: center; gap: 11px; padding: 2px 6px 20px; }
+.side-logo { display: flex; align-items: center; gap: 12px; padding: 4px 8px 22px; }
 .logo-mark {
-  width: 40px; height: 40px; border-radius: 13px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center; font-size: 19px;
-  overflow: hidden;
+  width: 42px; height: 42px; border-radius: 14px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
   background: var(--accent-grad);
-  box-shadow: 0 8px 20px -8px color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow: 0 10px 22px -8px color-mix(in srgb, var(--accent) 70%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
-.side-logo b { display: block; font-size: 14.5px; line-height: 1.25; letter-spacing: -0.01em; }
-.side-logo span { display: block; font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.side-logo b { display: block; font-size: 14.5px; line-height: 1.25; letter-spacing: -0.015em; }
+.side-logo span { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
 .side-nav { flex: 1; }
-.side-group { margin-bottom: 18px; }
+.side-group { margin-bottom: 20px; }
 .side-label {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--muted); padding: 0 12px 7px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); padding: 0 12px 8px;
 }
 .side-btn {
-  display: flex; align-items: center; gap: 11px; width: 100%;
+  display: flex; align-items: center; gap: 12px; width: 100%;
   border: none; background: none; font-family: inherit; text-align: left;
   font-size: 13.5px; font-weight: 500; color: var(--text-secondary);
-  padding: 9px 12px; border-radius: 12px; cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  padding: 10px 12px; border-radius: var(--r-sm); cursor: pointer;
+  position: relative;
+  transition: background 0.16s, color 0.16s, transform 0.16s;
 }
-.side-btn i { font-style: normal; font-size: 15px; width: 21px; text-align: center; }
+.side-btn i { font-style: normal; width: 21px; text-align: center; }
 .side-btn:hover { background: var(--accent-soft); color: var(--text-primary); }
 .side-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 700;
-  box-shadow: inset 2.5px 0 0 var(--accent);
+  background: linear-gradient(100deg, var(--accent-soft), transparent);
+  color: var(--accent); font-weight: 700;
+}
+.side-btn.active::before {
+  content: ""; position: absolute; left: 3px; top: 22%; bottom: 22%; width: 3px;
+  border-radius: 99px; background: var(--accent-grad);
 }
 .side-bottom { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .side-bottom .btn.primary { width: 100%; justify-content: center; }
-.side-user { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.side-user { display: flex; align-items: center; gap: 6px; }
 .side-user .user-chip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
 .topbar {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
-  padding: 26px 30px 0;
-  flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 6px 8px 0; margin-bottom: 4px; flex-wrap: wrap;
 }
-.topbar h1 { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
+.topbar h1 {
+  font-size: 24px; margin: 0; letter-spacing: -0.025em; font-weight: 700;
+  background: linear-gradient(120deg, var(--text-primary), var(--accent));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
 .topbar .sub { margin: 3px 0 0; font-size: 12.5px; color: var(--text-secondary); }
-.file-info { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
-.file-info .chip-file { background: var(--accent-soft); color: var(--accent); padding: 4px 13px; border-radius: 99px; font-weight: 600; }
+.file-info {
+  display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); flex-wrap: wrap;
+  padding: 7px 10px 7px 14px; border-radius: 99px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card);
+}
+.file-info .chip-file { background: var(--accent-soft); color: var(--accent); padding: 4px 12px; border-radius: 99px; font-weight: 600; }
 
-main { width: 100%; max-width: 1240px; margin: 0 auto; padding: 20px 30px 90px; }
-
+main { width: 100%; max-width: 1260px; margin: 0 auto; padding: 16px 8px 90px; }
 .hidden { display: none !important; }
 
-/* จอแคบ: sidebar พับเป็นแถบเลื่อนแนวนอน */
-@media (max-width: 880px) {
-  .app-shell { flex-direction: column; }
+/* จอแคบ: sidebar พับเป็นแถบเลื่อนแนวนอนด้านบน */
+@media (max-width: 900px) {
+  .app-shell { flex-direction: column; gap: 12px; padding: 12px; }
   .sidebar {
-    width: 100%; height: auto; position: sticky; top: 0; z-index: 30;
+    width: 100%; height: auto; position: sticky; top: 8px; z-index: 30;
     flex-direction: row; align-items: center; gap: 6px;
-    padding: 8px 12px; overflow-x: auto; overflow-y: hidden;
-    border-right: none; border-bottom: 1px solid var(--border);
+    padding: 9px 12px; overflow-x: auto; overflow-y: hidden; border-radius: 18px;
   }
-  .side-logo { padding: 0 6px 0 0; }
+  .side-logo { padding: 0 8px 0 0; }
   .side-logo div { display: none; }
-  .logo-mark { width: 34px; height: 34px; border-radius: 11px; font-size: 16px; }
   .side-nav { display: flex; gap: 4px; flex: initial; }
   .side-group { display: flex; gap: 4px; margin: 0; }
   .side-label { display: none; }
-  .side-btn { width: auto; white-space: nowrap; padding: 7px 11px; box-shadow: none; }
-  .side-btn.active { box-shadow: none; }
+  .side-btn { width: auto; white-space: nowrap; padding: 8px 11px; }
+  .side-btn.active::before { display: none; }
   .side-bottom { border: none; padding: 0; flex-direction: row; align-items: center; }
-  .side-user .user-chip { max-width: 110px; }
-  main { padding: 14px 14px 60px; }
-  .topbar { padding: 16px 14px 0; }
+  .side-user .user-chip { max-width: 108px; }
+  main { padding: 8px 4px 60px; }
+  .topbar { padding: 8px 4px 0; }
 }
 
 /* ============================================================
-   หน้าเริ่มต้น / dropzone
+   หน้าเริ่มต้น
    ============================================================ */
 .dropzone {
-  border: 1.6px dashed var(--axis);
-  border-radius: 24px;
-  background: var(--surface-1);
-  box-shadow: var(--shadow-card);
-  padding: 58px 24px;
-  text-align: center;
-  cursor: pointer;
-  transition: border-color 0.16s, box-shadow 0.16s, transform 0.16s;
-  margin-top: 22px;
+  border: 1.5px dashed var(--axis);
+  border-radius: var(--r);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+  padding: 60px 24px; text-align: center; cursor: pointer; margin-top: 20px;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
 }
-.dropzone:hover { border-color: var(--accent); }
-.dropzone.dragover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 5px var(--accent-soft), var(--shadow-card);
-  transform: scale(1.004);
-}
+.dropzone:hover { border-color: var(--accent); transform: translateY(-2px); }
+.dropzone.dragover { border-color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft), var(--shadow-pop); }
 .dropzone .dz-icon {
-  width: 68px; height: 68px; margin: 0 auto; border-radius: 20px;
-  display: flex; align-items: center; justify-content: center; font-size: 32px;
+  width: 74px; height: 74px; margin: 0 auto; border-radius: 22px;
+  display: flex; align-items: center; justify-content: center;
   background: var(--accent-grad);
-  box-shadow: 0 14px 30px -10px color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 16px 34px -12px color-mix(in srgb, var(--accent) 66%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
-.dropzone h2 { margin: 18px 0 5px; font-size: 19px; letter-spacing: -0.01em; }
+.dropzone h2 { margin: 20px 0 5px; font-size: 20px; letter-spacing: -0.015em; }
 .dropzone p { margin: 0; color: var(--text-secondary); font-size: 13.5px; }
-.dz-actions { margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.dz-actions { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 
-.hint-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 20px; }
+.hint-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
 .hint-card {
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 18px;
-  box-shadow: var(--shadow-card);
-  padding: 16px 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+  border-radius: var(--r-sm); padding: 17px 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
 }
-.hint-card b { color: var(--text-primary); display: block; margin-bottom: 4px; font-size: 13.5px; }
+.hint-card b { color: var(--text-primary); display: flex; align-items: center; gap: 7px; margin-bottom: 6px; font-size: 13.5px; }
 
 /* ============================================================
    ปุ่ม / ชิป
    ============================================================ */
 .btn {
   display: inline-flex; align-items: center; gap: 7px;
-  border: 1px solid var(--border);
-  background: var(--surface-1);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   color: var(--text-primary);
-  border-radius: 12px;
-  padding: 8px 15px;
-  font-size: 13.5px; font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(22, 22, 26, 0.05);
-  transition: background 0.13s, transform 0.13s, box-shadow 0.13s;
+  border-radius: 12px; padding: 8px 15px; font-size: 13.5px; font-weight: 500;
+  font-family: inherit; cursor: pointer;
+  box-shadow: 0 2px 8px -3px rgba(0, 23, 55, 0.2);
+  transition: background 0.14s, transform 0.14s, box-shadow 0.14s, border-color 0.14s;
 }
-.btn:hover { background: var(--accent-soft); }
+.btn:hover { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .btn:active { transform: translateY(1px); }
 .btn.primary {
-  background: var(--accent-grad);
-  border: none; color: #fff; font-weight: 600;
-  box-shadow: 0 10px 22px -9px color-mix(in srgb, var(--accent) 70%, transparent);
+  background: var(--accent-grad); border: none; color: #fff; font-weight: 600;
+  box-shadow: 0 12px 26px -10px color-mix(in srgb, var(--accent) 75%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
-.btn.primary:hover { filter: brightness(1.07); background: var(--accent-grad); }
+.btn.primary:hover { filter: brightness(1.08); background: var(--accent-grad); }
 .btn.small { padding: 5px 11px; font-size: 12.5px; border-radius: 10px; }
 
-.filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-.filter-bar .label { font-size: 13px; color: var(--text-secondary); margin-right: 2px; }
+.filter-bar { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+.filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.filter-bar .label { font-size: 12px; font-weight: 600; color: var(--muted); margin-right: 2px; min-width: 96px; }
 .chip {
-  border: 1px solid var(--border); background: var(--surface-1);
-  border-radius: 99px; padding: 5px 15px; font-size: 13px; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-radius: 99px; padding: 5px 15px; font-size: 12.5px; font-weight: 500; cursor: pointer;
   color: var(--text-secondary); font-family: inherit;
-  box-shadow: 0 1px 2px rgba(22, 22, 26, 0.04);
-  transition: background 0.13s, color 0.13s;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
 .chip:hover { background: var(--accent-soft); }
 .chip.active {
@@ -313,112 +332,113 @@ main { width: 100%; max-width: 1240px; margin: 0 auto; padding: 20px 30px 90px; 
    การ์ด
    ============================================================ */
 .card {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  box-shadow: var(--shadow-card);
-  padding: 20px 22px;
-  margin-bottom: 16px;
+  border-radius: var(--r); padding: 20px 22px; margin-bottom: var(--gap);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
 }
-.card h3 { margin: 0 0 4px; font-size: 15.5px; letter-spacing: -0.01em; }
+.card h3 { margin: 0 0 4px; font-size: 15.5px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 7px; }
 .card .card-sub { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .card-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+@media (max-width: 880px) { .grid-2 { grid-template-columns: 1fr; } }
 
 /* ============================================================
-   stat tiles
+   Stat tiles
    ============================================================ */
-/* ===== แถบฮีโร่ภาพรวม (แดชบอร์ด) ===== */
-.hero-band {
-  display: flex; gap: 28px; align-items: stretch; flex-wrap: wrap;
-  border-radius: 22px; padding: 24px 28px; margin-bottom: 16px;
-  color: #fff;
-  background:
-    radial-gradient(560px 260px at 88% -30%, rgba(255, 255, 255, 0.16), transparent 60%),
-    var(--accent-grad);
-  box-shadow: 0 18px 44px -16px color-mix(in srgb, var(--accent) 55%, transparent);
-}
-.hero-left { flex: 1; min-width: 250px; }
-.hero-label { font-size: 12.5px; font-weight: 600; opacity: 0.85; display: flex; align-items: center; gap: 6px; }
-.hero-label svg.lucide { width: 15px; height: 15px; color: #fff; }
-.hero-score { font-size: 52px; font-weight: 700; line-height: 1.05; letter-spacing: -0.03em; margin: 6px 0 8px; }
-.hero-outof { font-size: 19px; font-weight: 500; opacity: 0.65; margin-left: 8px; }
-.hero-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; opacity: 0.95; }
-.hero-meta .lv { background: rgba(255, 255, 255, 0.2); color: #fff; }
-.hero-resp { margin-top: 14px; font-size: 13px; opacity: 0.95; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.hero-resp b { font-size: 16px; }
-.hero-resp input {
-  width: 74px; font-family: inherit; font-size: 13px; text-align: center;
-  padding: 4px 6px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.35);
-  background: rgba(255, 255, 255, 0.14); color: #fff;
-}
-.hero-resp input::placeholder { color: rgba(255, 255, 255, 0.6); }
-.hero-resp input:focus { outline: none; border-color: #fff; }
-.hero-right { flex: 1.1; min-width: 280px; display: flex; flex-direction: column; justify-content: center; gap: 9px; }
-.hb-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
-.hb-name { flex: 0 0 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; text-align: right; }
-.hb-track { flex: 1; height: 7px; border-radius: 99px; background: rgba(255, 255, 255, 0.22); overflow: hidden; }
-.hb-track i { display: block; height: 100%; border-radius: 99px; background: #fff; }
-.hb-val { width: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.hb-empty { font-size: 13px; opacity: 0.8; }
-@media (max-width: 700px) { .hero-right { min-width: 100%; } .hero-score { font-size: 42px; } }
-
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
 .tile {
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 18px;
-  box-shadow: var(--shadow-card);
-  padding: 17px 18px; display: flex; gap: 13px; align-items: flex-start;
-  transition: transform 0.15s, box-shadow 0.15s;
+  border-radius: var(--r-sm); padding: 17px 18px; display: flex; gap: 13px; align-items: flex-start;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+  transition: transform 0.16s, box-shadow 0.16s;
 }
-.tile:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+.tile:hover { transform: translateY(-3px); box-shadow: var(--shadow-pop); }
 .tile .t-icon {
   width: 42px; height: 42px; border-radius: 13px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center; font-size: 19px;
+  display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft);
 }
 .tile .t-label { font-size: 12.5px; color: var(--text-secondary); }
 .tile .t-value { font-size: 27px; font-weight: 700; margin-top: 2px; line-height: 1.12; letter-spacing: -0.02em; }
 .tile .t-extra { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .tile.accent .t-value { color: var(--accent); }
-
-/* การ์ดฮีโร่ไล่สี (ใบแรก) — แบบการ์ด Total Employees ในภาพ reference */
 .tile.hero { background: var(--accent-grad); border: none; }
 .tile.hero .t-label, .tile.hero .t-extra { color: rgba(255, 255, 255, 0.82); }
 .tile.hero .t-value { color: #fff; }
-.tile.hero .t-icon { background: rgba(255, 255, 255, 0.2); }
+.tile.hero .t-icon { background: rgba(255, 255, 255, 0.22); }
 
 /* ============================================================
-   ตารางในแอป
+   แถบฮีโร่ภาพรวม
    ============================================================ */
-.tbl-wrap { overflow-x: auto; border-radius: 12px; }
+.hero-band {
+  display: flex; gap: 28px; align-items: stretch; flex-wrap: wrap;
+  border-radius: var(--r); padding: 26px 30px; margin-bottom: var(--gap); color: #fff;
+  background:
+    radial-gradient(600px 280px at 88% -30%, rgba(255, 255, 255, 0.18), transparent 60%),
+    var(--accent-grad);
+  box-shadow: 0 22px 50px -18px color-mix(in srgb, var(--accent) 60%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.hero-left { flex: 1; min-width: 250px; }
+.hero-label { font-size: 12.5px; font-weight: 600; opacity: 0.9; display: flex; align-items: center; gap: 6px; }
+.hero-label svg.lucide { color: #fff; }
+.hero-score { font-size: 54px; font-weight: 700; line-height: 1.05; letter-spacing: -0.035em; margin: 8px 0 10px; }
+.hero-outof { font-size: 19px; font-weight: 500; opacity: 0.62; margin-left: 8px; }
+.hero-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; opacity: 0.95; }
+.hero-meta .lv { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.hero-resp { margin-top: 15px; font-size: 13px; opacity: 0.95; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hero-resp b { font-size: 16px; }
+.hero-resp input {
+  width: 74px; font-family: inherit; font-size: 13px; text-align: center;
+  padding: 5px 7px; border-radius: 9px; border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.16); color: #fff;
+}
+.hero-resp input::placeholder { color: rgba(255, 255, 255, 0.6); }
+.hero-resp input:focus { outline: none; border-color: #fff; }
+.hero-right { flex: 1.1; min-width: 280px; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.hb-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.hb-name { flex: 0 0 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; text-align: right; }
+.hb-track { flex: 1; height: 7px; border-radius: 99px; background: rgba(255, 255, 255, 0.24); overflow: hidden; }
+.hb-track i { display: block; height: 100%; border-radius: 99px; background: #fff; }
+.hb-val { width: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.hb-empty { font-size: 13px; opacity: 0.8; }
+@media (max-width: 700px) { .hero-right { min-width: 100%; } .hero-score { font-size: 44px; } }
+
+/* ============================================================
+   ตาราง
+   ============================================================ */
+.tbl-wrap { overflow-x: auto; border-radius: var(--r-sm); }
 table.app { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 table.app th, table.app td { padding: 8px 12px; border-bottom: 1px solid var(--grid); text-align: center; vertical-align: top; }
 table.app th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.02em; }
 table.app td.item, table.app th.item { text-align: left; }
 table.app td.num { font-variant-numeric: tabular-nums; }
-table.app tr.total td { font-weight: 700; border-top: 1.5px solid var(--axis); background: var(--surface-2); }
+table.app tr.total td { font-weight: 700; border-top: 1.5px solid var(--axis); background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
 table.app tr:hover td { background: var(--accent-soft); }
-table.app tr.total:hover td { background: var(--surface-2); }
+table.app tr.total:hover td { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
 
-/* ป้ายระดับผลการประเมิน — สีคู่ข้อความเสมอ */
 .lv { display: inline-block; padding: 2px 11px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
-.lv.l5 { background: rgba(12, 163, 12, 0.13); color: #0a7d0a; }
-.lv.l4 { background: rgba(42, 120, 214, 0.12); color: #1c5cab; }
-.lv.l3 { background: rgba(250, 178, 25, 0.16); color: #8a6200; }
-.lv.l2 { background: rgba(236, 131, 90, 0.16); color: #a84d22; }
-.lv.l1 { background: rgba(208, 59, 59, 0.14); color: #b02f2f; }
+.lv.l5 { background: rgba(10, 107, 63, 0.14); color: #0a6b3f; }
+.lv.l4 { background: rgba(26, 84, 166, 0.13); color: #1a54a6; }
+.lv.l3 { background: rgba(200, 150, 20, 0.16); color: #8a6200; }
+.lv.l2 { background: rgba(214, 100, 60, 0.16); color: #a84d22; }
+.lv.l1 { background: rgba(214, 69, 69, 0.14); color: #b02f2f; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .lv.l5 { color: #56d656; }
-  :root:not([data-theme="light"]) .lv.l4 { color: #8fbcf1; }
+  :root:not([data-theme="light"]) .lv.l5 { color: #47d68d; }
+  :root:not([data-theme="light"]) .lv.l4 { color: #7fb0ef; }
   :root:not([data-theme="light"]) .lv.l3 { color: #fac95e; }
   :root:not([data-theme="light"]) .lv.l2 { color: #f0a882; }
   :root:not([data-theme="light"]) .lv.l1 { color: #ee7d7d; }
 }
-:root[data-theme="dark"] .lv.l5 { color: #56d656; }
-:root[data-theme="dark"] .lv.l4 { color: #8fbcf1; }
+:root[data-theme="dark"] .lv.l5 { color: #47d68d; }
+:root[data-theme="dark"] .lv.l4 { color: #7fb0ef; }
 :root[data-theme="dark"] .lv.l3 { color: #fac95e; }
 :root[data-theme="dark"] .lv.l2 { color: #f0a882; }
 :root[data-theme="dark"] .lv.l1 { color: #ee7d7d; }
@@ -427,14 +447,12 @@ table.app tr.total:hover td { background: var(--surface-2); }
 .meanbar > i { display: block; height: 100%; border-radius: 99px; background: var(--accent-grad); }
 
 .chart-box { position: relative; width: 100%; }
-
 ul.sugg { margin: 6px 0 0; padding-left: 22px; }
 ul.sugg li { margin-bottom: 6px; }
 .sugg-count { color: var(--muted); font-size: 12.5px; }
-
 select.coltype {
   font-family: inherit; font-size: 13px; padding: 5px 8px; border-radius: 10px;
-  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--glass-border); background: var(--surface-1); color: var(--text-primary);
 }
 td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-width: 320px; }
 
@@ -443,58 +461,26 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
    ============================================================ */
 .sum-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 10px 2px; border-bottom: 1px solid var(--grid);
-  font-size: 13.5px; color: var(--text-secondary);
+  padding: 10px 2px; border-bottom: 1px solid var(--grid); font-size: 13.5px; color: var(--text-secondary);
 }
 .sum-row:last-of-type { border-bottom: none; }
 .sum-row b { color: var(--text-primary); font-weight: 600; text-align: right; }
 .sum-row .num { font-variant-numeric: tabular-nums; font-weight: 700; }
 .sdg-mini { display: flex; gap: 7px; flex-wrap: wrap; padding-top: 12px; }
-.sdg-mini img { width: 36px; height: 36px; border-radius: 9px; box-shadow: 0 4px 10px -4px rgba(0, 0, 0, 0.3); }
+.sdg-mini img { width: 36px; height: 36px; border-radius: 9px; box-shadow: 0 5px 12px -4px rgba(0, 23, 55, 0.4); }
 
-/* ===== แผนที่ความถี่ (heatmap) ===== */
-.hm-wrap { max-height: 560px; overflow-y: auto; overflow-x: auto; padding-right: 4px; }
-.hm-row {
-  display: grid; grid-template-columns: minmax(150px, 1fr) repeat(5, 46px);
-  gap: 6px; align-items: center; margin-bottom: 6px; min-width: 420px;
-}
-.hm-head { position: sticky; top: 0; background: var(--surface-1); z-index: 2; padding: 2px 0; }
-.hm-col { text-align: center; font-size: 11.5px; font-weight: 700; color: var(--muted); }
-.hm-name {
-  font-size: 12px; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;
-}
-.hm-cell {
-  height: 32px; border-radius: 9px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
-  background: var(--surface-2); border: 1px solid var(--grid);
-  cursor: default; transition: transform 0.1s, box-shadow 0.1s;
-}
-.hm-cell:hover { transform: scale(1.14); box-shadow: var(--shadow-pop); z-index: 3; }
-.hm-group {
-  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--muted); margin: 12px 0 6px;
-}
-.hm-group:first-of-type { margin-top: 4px; }
-
-/* ===== รวมหลายแบบประเมินในเล่มเดียว ===== */
-.combine-card { margin-bottom: 14px; }
-.combine-item { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--grid); font-size: 13.5px; cursor: pointer; }
-.combine-item:last-child { border-bottom: none; }
-.combine-item b { font-weight: 600; }
-.combine-item:hover { background: var(--accent-soft); border-radius: 8px; }
-
-.sdg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.sdg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
 .sdg-card {
-  display: flex; gap: 13px; align-items: center;
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 18px;
-  box-shadow: var(--shadow-card);
-  padding: 14px 15px;
-  transition: transform 0.15s, box-shadow 0.15s;
+  display: flex; gap: 13px; align-items: center; border-radius: var(--r-sm); padding: 14px 15px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+  transition: transform 0.16s, box-shadow 0.16s;
 }
-.sdg-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
-.sdg-card img { width: 62px; height: 62px; border-radius: 12px; flex-shrink: 0; box-shadow: 0 6px 14px -6px rgba(0, 0, 0, 0.35); }
+.sdg-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-pop); }
+.sdg-card img { width: 62px; height: 62px; border-radius: 13px; flex-shrink: 0; box-shadow: 0 7px 16px -6px rgba(0, 23, 55, 0.4); }
 .sdg-card .sdg-pct { font-size: 22px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; }
 .sdg-card .sdg-name { font-size: 11.5px; color: var(--text-secondary); line-height: 1.35; margin-top: 3px; }
 .sdg-card .sdg-n { font-size: 11px; color: var(--muted); margin-top: 3px; }
@@ -504,83 +490,147 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
 .sdg-card .sdg-body { flex: 1; min-width: 0; }
 
 /* ============================================================
-   ผู้ใช้ / login
+   ผู้ใช้ / login / modal
    ============================================================ */
-.user-chip { background: var(--accent-soft); color: var(--accent); padding: 4px 13px; border-radius: 99px; font-size: 12.5px; font-weight: 600; }
+.user-chip { background: var(--accent-soft); color: var(--accent); padding: 4px 12px; border-radius: 99px; font-size: 12.5px; font-weight: 600; }
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(8, 9, 14, 0.5); z-index: 100;
-  backdrop-filter: blur(7px);
-  -webkit-backdrop-filter: blur(7px);
-  display: flex; align-items: center; justify-content: center; padding: 20px;
+  position: fixed; inset: 0; z-index: 100; padding: 20px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2, 6, 15, 0.55);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .modal {
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 22px;
-  padding: 30px 32px; max-width: 410px; width: 100%;
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--r); padding: 30px 32px; max-width: 420px; width: 100%;
+  background: var(--glass-bg);
+  backdrop-filter: blur(26px) saturate(1.5); -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-hi);
 }
-.modal h2 { margin: 0 0 8px; font-size: 21px; letter-spacing: -0.01em; }
+.modal-wide { max-width: 580px; }
+.modal h2 { margin: 0 0 8px; font-size: 21px; letter-spacing: -0.015em; display: flex; align-items: center; gap: 8px; }
 .modal p { margin: 0 0 18px; font-size: 13.5px; color: var(--text-secondary); }
 .modal label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 13px; }
 .modal input {
   display: block; width: 100%; margin-top: 5px;
   font-family: inherit; font-size: 14.5px; padding: 10px 14px; border-radius: 12px;
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary);
-  transition: border-color 0.13s, box-shadow 0.13s;
+  border: 1px solid var(--glass-border); background: var(--surface-1); color: var(--text-primary);
+  transition: border-color 0.14s, box-shadow 0.14s;
 }
 .modal input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .modal .btn { width: 100%; justify-content: center; margin-top: 8px; padding: 11px; }
-
 .days-left { font-size: 11.5px; color: var(--muted); }
-.days-left.warn { color: #b02f2f; font-weight: 600; }
+.days-left.warn { color: #d64545; font-weight: 600; }
 
 /* ============================================================
-   หน้ารายงานราชการ (พรีวิวกระดาษ)
+   รวมหลายแบบประเมิน (การ์ดในรายงาน)
+   ============================================================ */
+.combine-card { margin-bottom: 14px; }
+.combine-item { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--grid); font-size: 13.5px; }
+.combine-item:last-child { border-bottom: none; }
+.combine-item b { font-weight: 600; }
+
+/* ============================================================
+   สแต็กแบบประเมิน (หน้าแรก) — การ์ดกระจกซ้อนแบบพัด
+   ============================================================ */
+.deck-wrap { margin: 32px 0 4px; }
+.deck-title { font-size: 15px; margin: 0 0 22px; letter-spacing: -0.01em; }
+.deck { display: flex; justify-content: center; align-items: flex-end; padding: 14px 0 32px; }
+.deck-card {
+  position: relative; width: 176px; min-height: 208px; margin: 0 -36px;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 17px; border-radius: 22px; text-align: left;
+  font-family: inherit; font-size: 13px; cursor: pointer; color: var(--text-primary);
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+  transform: rotate(var(--r, 0deg)) translateY(var(--y, 0px));
+  transition: transform 0.26s cubic-bezier(0.2, 0.7, 0.3, 1.3), box-shadow 0.26s, border-color 0.26s;
+}
+.deck-card:hover, .deck-card:focus-visible {
+  transform: rotate(0deg) translateY(-26px) scale(1.07); z-index: 10;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 30px 60px -18px color-mix(in srgb, var(--accent) 46%, transparent), var(--shadow-pop);
+}
+.deck-card b { font-size: 12.5px; line-height: 1.4; font-weight: 600; }
+.dc-icon {
+  width: 38px; height: 38px; border-radius: 12px; flex-shrink: 0; margin-bottom: 3px;
+  background: var(--accent-grad); display: flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.dc-icon svg.lucide { color: #fff; }
+.dc-meta { font-size: 11px; color: var(--muted); }
+.dc-score { margin-top: auto; font-size: 23px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+.dc-score i { font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+@media (max-width: 760px) {
+  .deck { flex-wrap: wrap; gap: 12px; }
+  .deck-card { margin: 0; transform: none; }
+}
+
+/* ============================================================
+   Heatmap ความถี่ (โทนกรมท่า)
+   ============================================================ */
+.hm-wrap { max-height: 560px; overflow: auto; padding-right: 4px; }
+.hm-row { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(5, 46px); gap: 6px; align-items: center; margin-bottom: 6px; min-width: 420px; }
+.hm-head { position: sticky; top: 0; z-index: 2; padding: 2px 0; background: color-mix(in srgb, var(--surface-1) 70%, transparent); backdrop-filter: blur(6px); }
+.hm-col { text-align: center; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.hm-name { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+.hm-cell {
+  height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); border: 1px solid var(--grid);
+  cursor: default; transition: transform 0.12s, box-shadow 0.12s;
+}
+.hm-cell:hover { transform: scale(1.16); box-shadow: var(--shadow-pop); z-index: 3; }
+.hm-group { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+.hm-group:first-of-type { margin-top: 4px; }
+.hm-legend { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.hm-scale-wrap { display: inline-flex; align-items: center; gap: 7px; }
+.hm-scale { display: inline-block; width: 130px; height: 8px; border-radius: 99px; background: linear-gradient(90deg, #dbe6f5, #123c78); }
+
+/* ============================================================
+   รายงานราชการ (กระดาษทึบ — ไม่ใช้กระจก)
    ============================================================ */
 .report-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
 .report-controls label.ck { font-size: 13.5px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
 .report-controls input[type="text"] {
   font-family: inherit; font-size: 14px; padding: 9px 14px; border-radius: 12px;
-  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
-  min-width: 300px; flex: 1;
-  box-shadow: 0 1px 2px rgba(22, 22, 26, 0.04);
+  border: 1px solid var(--glass-border); background: var(--surface-1); color: var(--text-primary); min-width: 300px; flex: 1;
 }
 .report-controls input[type="text"]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .paper {
-  background: var(--paper);
-  color: #000;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: var(--shadow-pop);
-  max-width: 850px;
-  margin: 0 auto;
-  padding: 56px 64px;
+  background: var(--paper); color: #000; border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: var(--shadow-pop); max-width: 850px; margin: 0 auto; padding: 56px 64px;
 }
-/* พรีวิวบนจอใช้ฟอนต์ระบบเสมอ (override แม้แต่ inline style ด้วย !important) —
-   กันฟอนต์ TH Sarabun รุ่น IT๙ ในบางเครื่องที่วาดเลขอารบิกเป็นเลขไทยเอง
-   ส่วน HTML ที่คัดลอก/ดาวน์โหลดยังฝังฟอนต์ TH Sarabun ไว้ให้ Word ตามเดิม */
-.paper, .paper * {
-  font-family: "Sarabun", "Leelawadee UI", "Thonburi", "Noto Sans Thai", sans-serif !important;
-}
+.paper, .paper * { font-family: "Sarabun", "Leelawadee UI", "Thonburi", "Noto Sans Thai", sans-serif !important; }
 .report-block { position: relative; border-radius: 6px; }
 .report-block:hover { outline: 2px dashed var(--accent); outline-offset: 6px; }
-.report-block .blk-copy {
-  position: absolute; top: -4px; right: -8px; z-index: 5;
-  opacity: 0; transition: opacity 0.12s;
-  font-family: "Anuphan", system-ui, sans-serif !important;
-}
+.report-block .blk-copy { position: absolute; top: -4px; right: -8px; z-index: 5; opacity: 0; transition: opacity 0.12s; font-family: "Anuphan", system-ui, sans-serif !important; }
 .report-block:hover .blk-copy { opacity: 1; }
 
 /* ============================================================
-   toast + print
+   Toast + ไอคอน + print
    ============================================================ */
 #toast {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
-  background: var(--text-primary); color: var(--page);
-  padding: 10px 22px; border-radius: 99px; font-size: 13.5px; font-weight: 600;
-  box-shadow: var(--shadow-pop);
+  background: var(--navy-800); color: #fff; padding: 11px 22px; border-radius: 99px;
+  font-size: 13.5px; font-weight: 600; box-shadow: var(--shadow-pop);
+  border: 1px solid var(--glass-border);
   opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s; z-index: 999;
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+svg.lucide { width: 15px; height: 15px; stroke-width: 2; vertical-align: -2.5px; flex-shrink: 0; }
+.side-btn svg.lucide { width: 17px; height: 17px; }
+.logo-mark svg.lucide { width: 21px; height: 21px; color: #fff; }
+.dz-icon svg.lucide { width: 32px; height: 32px; color: #fff; }
+.t-icon svg.lucide { width: 20px; height: 20px; color: var(--accent); }
+.tile.hero .t-icon svg.lucide { color: #fff; }
+.hint-card b svg.lucide { width: 15px; height: 15px; color: var(--accent); }
+.card h3 svg.lucide { width: 16px; height: 16px; color: var(--accent); }
+.btn svg.lucide { width: 14px; height: 14px; }
+.modal h2 svg.lucide { width: 20px; height: 20px; color: var(--accent); vertical-align: -3px; }
+.user-chip svg.lucide { width: 13px; height: 13px; vertical-align: -2px; }
+.lv svg.lucide { width: 12px; height: 12px; vertical-align: -1.5px; stroke-width: 3; }
 
 @media print {
   body * { visibility: hidden; }
@@ -588,65 +638,3 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
   .paper { position: absolute; left: 0; top: 0; box-shadow: none; border: none; max-width: none; width: 100%; padding: 0; }
   .blk-copy { display: none !important; }
 }
-
-/* ===== ลุคพรีเมียม (redesign เขียวมรกต) ===== */
-.topbar h1 {
-  background: var(--accent-grad);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  width: fit-content;
-}
-.card, .tile, .sdg-card, .hint-card {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 24%);
-}
-.modal-wide { max-width: 560px; }
-
-/* ตัวกรองหลายชั้น */
-.filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
-.filter-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
-
-/* ===== สแต็กแบบประเมิน (หน้าแรก) — การ์ดพัดซ้อนกัน กดเพื่อเปิด ===== */
-.deck-wrap { margin: 30px 0 4px; }
-.deck-title { font-size: 15px; margin: 0 0 20px; letter-spacing: -0.01em; }
-.deck { display: flex; justify-content: center; align-items: flex-end; padding: 12px 0 30px; }
-.deck-card {
-  position: relative;
-  width: 172px; min-height: 200px; margin: 0 -34px;
-  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
-  padding: 16px; border-radius: 20px; text-align: left;
-  font-family: inherit; font-size: 13px; cursor: pointer;
-  color: var(--text-primary);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 30%),
-    color-mix(in srgb, var(--surface-1) 88%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  transform: rotate(var(--r)) translateY(var(--y));
-  transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.3, 1.25), box-shadow 0.24s, border-color 0.24s;
-}
-.deck-card:hover, .deck-card:focus-visible {
-  transform: rotate(0deg) translateY(-24px) scale(1.07);
-  z-index: 10;
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 26px 54px -18px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow-pop);
-}
-.deck-card b { font-size: 12.5px; line-height: 1.4; font-weight: 600; }
-.dc-icon {
-  width: 36px; height: 36px; border-radius: 12px; flex-shrink: 0;
-  background: var(--accent-grad);
-  display: flex; align-items: center; justify-content: center; margin-bottom: 3px;
-}
-.dc-icon svg.lucide { color: #fff; width: 16px; height: 16px; }
-.dc-meta { font-size: 11px; color: var(--muted); }
-.dc-score { margin-top: auto; font-size: 22px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
-.dc-score i { font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 3px; }
-@media (max-width: 760px) {
-  .deck { flex-wrap: wrap; gap: 12px; }
-  .deck-card { margin: 0; transform: none; }
-}
-
-/* heatmap legend */
-.hm-legend { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
-.hm-scale-wrap { display: inline-flex; align-items: center; gap: 7px; }
-.hm-scale { display: inline-block; width: 130px; height: 8px; border-radius: 99px; background: linear-gradient(90deg, #d9f4e7, #076a48); }
