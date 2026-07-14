@@ -89,7 +89,28 @@ const state = {
   user: null,        // { name, role } — จาก localStorage
   sessionId: null,   // id ของรายการประวัติที่กำลังทำงานอยู่
   theme: "auto",     // auto | light | dark
+  respTarget: null,  // จำนวนกลุ่มเป้าหมาย/แบบที่แจก — ใช้คำนวณอัตราการตอบกลับ
 };
+
+/** หาจำนวนกลุ่มเป้าหมาย (ผู้เข้าร่วม/แบบที่แจก) จากชีตสรุปอื่น ๆ ในไฟล์ ถ้ามี
+    — ต้องเป็นแถวที่พูดถึง "จำนวน...เข้าร่วม/แจก" และค่าต้องเป็นจำนวนเต็ม ≥ จำนวนผู้ตอบ */
+function scanRespondTarget(wb, primarySheet, minN = 1) {
+  try {
+    for (const name of wb.SheetNames) {
+      if (name === primarySheet) continue;
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", blankrows: false });
+      for (const r of aoa.slice(0, 80)) {
+        const label = String(r[0] ?? "");
+        if (!/(จำนวน|ยอด|แจก|กลุ่มเป้าหมาย)/.test(label)) continue;
+        if (!/(เข้าร่วม|กลุ่มเป้าหมาย|แจก)/.test(label)) continue;
+        if (/(ตอบ|ค่าเฉลี่ย|พึงพอใจ|ประสงค์|อยาก|ร้อยละ)/.test(label)) continue;
+        const num = r.slice(1, 6).map(Number).find((x) => Number.isFinite(x) && Number.isInteger(x) && x >= minN);
+        if (num) return num;
+      }
+    }
+  } catch { /* noop */ }
+  return null;
+}
 
 /* ============================================================
    ธีม: อัตโนมัติ / สว่าง / มืด
@@ -192,6 +213,7 @@ async function saveSessionSnapshot() {
       fileName: state.fileName,
       sheetName: state.sheetName,
       projectName: state.projectName,
+      respTarget: state.respTarget,
       headers: state.headers,
       rows: state.rows,
       colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item })),
@@ -257,20 +279,46 @@ function loadSheet(sheetName, opts = {}) {
   // ความกว้างจริง = คอลัมน์ที่ยาวที่สุดในทุกแถว (กันข้อมูลคอลัมน์ท้าย ๆ ที่ไม่มีชื่อหัวหาย)
   const width = Math.max(...aoa.map((r) => r.length));
   state.headers = Array.from({ length: width }, (_, i) => {
-    const h = String(aoa[hIdx][i] ?? "").trim();
+    const h = String(aoa[hIdx][i] ?? "").trim().replace(/\s+/g, " ");
     return h || `คอลัมน์ที่ ${i + 1}`;
   });
+
+  // หัวตาราง 2 ชั้น (ไฟล์กรอกมือจากแบบกระดาษ): แถวเหนือหัวตารางเป็น "แถบชื่อตอน/ด้าน"
+  // ที่ครอบหลายคอลัมน์ — เติมชื่อไปข้างหน้า (forward fill) เพื่อใช้จัดหมวดคำถามคะแนน
+  let bands = null;
+  if (hIdx > 0) {
+    const bandRow = aoa[hIdx - 1] || [];
+    const cells = [];
+    for (let i = 0; i < width; i++) {
+      const t = String(bandRow[i] ?? "").trim().replace(/\s+/g, " ");
+      if (t) cells.push([i, t]);
+    }
+    if (cells.length >= 2) {
+      bands = new Array(width).fill(null);
+      let cur = null;
+      for (let i = 0; i < width; i++) {
+        const hit = cells.find(([ci]) => ci === i);
+        if (hit) cur = hit[1];
+        bands[i] = cur;
+      }
+    }
+  }
+
   state.rows = aoa.slice(hIdx + 1)
     .map((r) => state.headers.map((_, i) => normalizeCell(r[i])))
     .filter((r) => r.some((v) => v !== ""));
-  state.columns = detectColumns(state.headers, state.rows);
+  state.columns = detectColumns(state.headers, state.rows, bands);
   if (opts.colTypes && opts.colTypes.length === state.columns.length) {
     state.columns.forEach((c, i) => Object.assign(c, opts.colTypes[i]));
   }
+  // นับเป็นผู้ตอบเฉพาะแถวที่มีคำตอบจริง — ไฟล์กรอกมือมักมีแถวเทมเพลตที่พิมพ์เลขลำดับรอไว้
+  const usedIdx = state.columns.filter((c) => c.type !== "ignore").map((c) => c.i);
+  state.rows = state.rows.filter((r) => usedIdx.some((i) => String(r[i]).trim() !== ""));
   state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
   state.filterValue = null;
   state.projectName = opts.projectName ?? state.projectName;
   state.activeTab = "dashboard";
+  if (!opts.fromHistory) state.respTarget = scanRespondTarget(state.workbook, sheetName, state.rows.length);
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -314,7 +362,7 @@ function unnamedGroupName(item) {
   return H5_ITEM_RE.test(item) ? H5_NAME : "ด้านที่ไม่ระบุชื่อ";
 }
 
-function detectColumns(headers, rows) {
+function detectColumns(headers, rows, bands = null) {
   return headers.map((header, i) => {
     const values = rows.map((r) => r[i]).filter((v) => v !== "");
     const col = { i, header, type: "text", group: null, item: null };
@@ -326,6 +374,8 @@ function detectColumns(headers, rows) {
 
     if (IGNORE_HEADER.test(header)) { col.type = "ignore"; return col; }
     if (ID_HEADER.test(header)) { col.type = "ignore"; return col; }
+    // คอลัมน์เลขลำดับ/เลขที่ของไฟล์กรอกมือ — ไม่ใช่ข้อมูลประเมิน
+    if (/^(ลำดับ|ลําดับ|ที่|เลขที่|no\.?|เลขประจำตัว)\s*$/i.test(header)) { col.type = "ignore"; return col; }
 
     // SDG / สองค่า สอดคล้อง–ไม่สอดคล้อง
     if (strs.every(isSdgLikeValue)) { col.type = "sdg"; return col; }
@@ -336,7 +386,7 @@ function detectColumns(headers, rows) {
     if (ratingOk >= 0.9 && (bracket || !DEMOG_HEADER.test(header))) {
       col.type = "rating";
       if (bracket) { col.item = bracket[2].trim(); col.group = bracket[1].trim() || unnamedGroupName(col.item); }
-      else { col.group = "การประเมินรายข้ออื่น ๆ"; col.item = header; }
+      else { col.group = (bands && bands[i]) || "การประเมินรายข้ออื่น ๆ"; col.item = header; }
       return col;
     }
 
@@ -821,14 +871,36 @@ function renderDashboard(panel, rows) {
   const overall = overallRatingStats(rows);
   const groups = ratingGroups(rows);
 
-  const tiles = document.createElement("div");
-  tiles.className = "tiles";
-  tiles.innerHTML = `
-    <div class="tile hero"><div class="t-icon"><i data-lucide="users"></i></div><div><div class="t-label">ผู้ตอบแบบสอบถาม</div><div class="t-value">${rows.length}</div><div class="t-extra">คน${state.filterValue ? " · กรอง: " + esc(state.filterValue) : ""}</div></div></div>
-    <div class="tile accent"><div class="t-icon"><i data-lucide="star"></i></div><div><div class="t-label">ค่าเฉลี่ยรวมทุกข้อ (x̄)</div><div class="t-value">${f2(overall.mean)}</div><div class="t-extra">จากคะแนนเต็ม 5</div></div></div>
-    <div class="tile"><div class="t-icon"><i data-lucide="sigma"></i></div><div><div class="t-label">ส่วนเบี่ยงเบนมาตรฐาน (S.D.)</div><div class="t-value">${f2(overall.sd)}</div><div class="t-extra">จาก ${overall.n} คำตอบ</div></div></div>
-    <div class="tile"><div class="t-icon"><i data-lucide="award"></i></div><div><div class="t-label">ระดับผลการประเมิน</div><div class="t-value" style="font-size:20px;padding-top:4px">${levelChip(overall.mean)}</div><div class="t-extra">เกณฑ์แปลผลค่าเฉลี่ย 5 ระดับ</div></div></div>`;
-  panel.appendChild(tiles);
+  // แถบฮีโร่ภาพรวม — สรุปหัวใจของผลประเมินก่อนลงลึก (อัตราตอบกลับแก้ตัวเลขเป้าหมายได้)
+  const totalResp = state.rows.length;
+  const respPct = state.respTarget ? Math.min((totalResp / state.respTarget) * 100, 999) : null;
+  const heroBars = groups.slice(0, 6).map((g) => `
+    <div class="hb-row" title="${esc(g.name)} — x̄ ${f2(g.total.mean)}">
+      <span class="hb-name">${esc(shortLabel(g.name, 150))}</span>
+      <span class="hb-track"><i style="width:${Number.isFinite(g.total.mean) ? (g.total.mean / 5) * 100 : 0}%"></i></span>
+      <span class="hb-val">${f2(g.total.mean)}</span>
+    </div>`).join("");
+  const hero = document.createElement("div");
+  hero.className = "hero-band";
+  hero.innerHTML = `
+    <div class="hero-left">
+      <div class="hero-label"><i data-lucide="sparkles"></i> ผลการประเมินโดยรวม${state.filterValue ? ` · ${esc(state.filterValue)}` : ""}</div>
+      <div class="hero-score">${f2(overall.mean)}<span class="hero-outof">/ 5</span></div>
+      <div class="hero-meta">${levelChip(overall.mean)}<span>S.D. ${f2(overall.sd)}</span><span>ผู้ตอบ ${rows.length} คน · ${overall.n} คำตอบ</span></div>
+      <div class="hero-resp">
+        อัตราการตอบกลับ <b>${respPct != null ? respPct.toFixed(2) + "%" : "— %"}</b>
+        · ตอบ ${totalResp} จากเป้าหมาย
+        <input id="respTarget" type="number" min="1" placeholder="ระบุ" value="${state.respTarget ?? ""}"> คน
+      </div>
+    </div>
+    <div class="hero-right">${heroBars || `<div class="hb-empty">ยังไม่มีคำถามแบบคะแนนให้สรุป</div>`}</div>`;
+  panel.appendChild(hero);
+  $("#respTarget", hero).onchange = (e) => {
+    const v = parseInt(e.target.value, 10);
+    state.respTarget = Number.isFinite(v) && v > 0 ? v : null;
+    saveSessionSnapshot();
+    renderActiveTab();
+  };
 
   // กลุ่มที่กรองไม่มีคำตอบแบบคะแนนเลย — แจ้งชัด ๆ แทนที่จะปล่อยตัวเลขว่าง
   if (!overall.n) {
@@ -1109,25 +1181,33 @@ const TYPE_LABELS = {
   text: "ข้อความปลายเปิด", ignore: "ไม่วิเคราะห์",
 };
 function renderColumns(panel) {
-  const card = cardEl(panel, "ชนิดของแต่ละคอลัมน์", "ระบบตรวจให้อัตโนมัติ — เปลี่ยนชนิดได้หากตรวจผิด แล้วผลวิเคราะห์ทุกแท็บจะคำนวณใหม่ทันที · จำนวน \"ตอบแล้ว\" ที่ไม่เท่ากันเป็นเรื่องปกติ เพราะแบบฟอร์มแยกชุดคำถามตามกลุ่มผู้ตอบ");
+  const card = cardEl(panel, "ชนิดของแต่ละคอลัมน์และการจัดด้าน", "เปลี่ยนชนิดข้อมูลหรือย้ายข้อคำถามไปด้านไหนก็ได้ — เลือก \"สร้างด้านใหม่…\" เพื่อตั้งด้านเอง แล้วผลวิเคราะห์ทุกแท็บจะคำนวณใหม่ทันที");
   const N = state.rows.length;
+  const groupNames = [...new Set(state.columns.filter((c) => c.type === "rating" && c.group).map((c) => c.group))];
   const rowsHtml = state.columns.map((c) => {
     const vals = state.rows.map((r) => String(r[c.i]).trim()).filter((v) => v !== "");
     const samples = [...new Set(vals)].slice(0, 3).join(" · ");
     const opts = Object.entries(TYPE_LABELS).map(([v, l]) => `<option value="${v}" ${c.type === v ? "selected" : ""}>${l}</option>`).join("");
     const pct = N ? Math.round((vals.length / N) * 100) : 0;
+    const groupSel = c.type === "rating"
+      ? `<select class="coltype colgroup" data-col="${c.i}">
+          ${groupNames.map((g) => `<option value="${esc(g)}" ${c.group === g ? "selected" : ""}>${esc(g.length > 38 ? g.slice(0, 38) + "…" : g)}</option>`).join("")}
+          <option value="__new__">➕ สร้างด้านใหม่…</option>
+        </select>`
+      : `<span class="sugg-count">—</span>`;
     return `<tr>
       <td class="item">${esc(c.header)}</td>
       <td class="num">${vals.length}/${N}<span class="meanbar" style="min-width:44px"><i style="width:${pct}%"></i></span></td>
       <td class="sample-vals">${esc(samples.slice(0, 90))}</td>
       <td><select class="coltype" data-col="${c.i}">${opts}</select></td>
+      <td>${groupSel}</td>
     </tr>`;
   }).join("");
   card.insertAdjacentHTML("beforeend", `
     <div class="tbl-wrap"><table class="app">
-      <tr><th class="item">คอลัมน์</th><th>ตอบแล้ว</th><th class="item">ตัวอย่างคำตอบ</th><th>ชนิดข้อมูล</th></tr>${rowsHtml}
+      <tr><th class="item">คอลัมน์</th><th>ตอบแล้ว</th><th class="item">ตัวอย่างคำตอบ</th><th>ชนิดข้อมูล</th><th>ด้าน/หมวด (เฉพาะคะแนน)</th></tr>${rowsHtml}
     </table></div>`);
-  $$("select.coltype", card).forEach((sel) => {
+  $$("select.coltype:not(.colgroup)", card).forEach((sel) => {
     sel.onchange = () => {
       const col = state.columns[+sel.dataset.col];
       col.type = sel.value;
@@ -1140,7 +1220,25 @@ function renderColumns(panel) {
       bumpDataVersion();
       renderFilterBar();
       saveSessionSnapshot();
+      renderActiveTab(); // วาดตารางใหม่ให้คอลัมน์ "ด้าน" โผล่/หายตามชนิดที่เปลี่ยน
       toast(`เปลี่ยน "${col.header.slice(0, 30)}..." เป็น ${TYPE_LABELS[col.type]}`);
+    };
+  });
+  // ย้ายข้อไปด้านอื่น / สร้างด้านใหม่
+  $$("select.colgroup", card).forEach((sel) => {
+    sel.onchange = () => {
+      const col = state.columns[+sel.dataset.col];
+      let g = sel.value;
+      if (g === "__new__") {
+        g = (prompt("ตั้งชื่อด้านใหม่ เช่น ด้านความพึงพอใจต่อกิจกรรม", "") || "").trim();
+        if (!g) { renderActiveTab(); return; }
+      }
+      col.group = g;
+      if (!col.item) col.item = col.header;
+      bumpDataVersion();
+      saveSessionSnapshot();
+      renderActiveTab();
+      toast(`ย้าย "${(col.item || col.header).slice(0, 25)}…" ไปด้าน "${g.slice(0, 30)}"`);
     };
   });
 }
@@ -1182,7 +1280,7 @@ function buildReportBlocks(rows) {
     title: "หัวรายงาน",
     html:
       `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการวิเคราะห์ข้อมูลแบบประเมินผลการดำเนินการ${esc(projText)}</p>` +
-      wp(`การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบสอบถามออนไลน์ มีผู้ตอบแบบสอบถามทั้งสิ้น <b>${rows.length}</b> คน${esc(filterNote)} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`),
+      wp(`การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบสอบถาม มีผู้ตอบแบบสอบถามทั้งสิ้น <b>${rows.length}</b> คน${esc(filterNote)}${state.respTarget ? ` จากกลุ่มเป้าหมาย ${state.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((state.rows.length / state.respTarget) * 100).toFixed(2)}` : ""} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`),
   });
 
   // ---------- ตอนที่ 1 ข้อมูลทั่วไป ----------
@@ -1472,6 +1570,7 @@ async function openSession(id) {
   state.statusColIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
   state.filterValue = null;
   state.projectName = s.projectName || "";
+  state.respTarget = s.respTarget ?? null;
   state.sessionId = s.id;
   bumpDataVersion();
 
