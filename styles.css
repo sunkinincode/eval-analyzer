@@ -638,3 +638,108 @@ svg.lucide { width: 15px; height: 15px; stroke-width: 2; vertical-align: -2.5px;
   .paper { position: absolute; left: 0; top: 0; box-shadow: none; border: none; max-width: none; width: 100%; padding: 0; }
   .blk-copy { display: none !important; }
 }
+
+/* ============================================================
+   หน้ารายงานราชการ — เลย์เอาต์สองคอลัมน์ (ตั้งค่า | เอกสาร)
+   ============================================================ */
+.report-layout { display: grid; grid-template-columns: 340px 1fr; gap: var(--gap); align-items: start; }
+.report-side { position: sticky; top: var(--gap); display: flex; flex-direction: column; gap: 14px; }
+.rp-card {
+  border-radius: var(--r-sm); padding: 16px 18px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+}
+.rp-title { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 7px; margin-bottom: 14px; }
+.rp-title svg.lucide { width: 16px; height: 16px; color: var(--accent); }
+.rp-field { display: block; margin-bottom: 14px; }
+.rp-field:last-child { margin-bottom: 0; }
+.rp-field > span { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.rp-field input, .rp-field select {
+  width: 100%; font-family: inherit; font-size: 13.5px; padding: 9px 12px; border-radius: 11px;
+  border: 1px solid var(--glass-border); background: var(--surface-1); color: var(--text-primary);
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+.rp-field input:focus, .rp-field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.rp-toggles { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+
+/* สวิตช์แบบเลื่อน */
+.rp-switch { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.rp-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.rp-switch .sw {
+  flex-shrink: 0; width: 38px; height: 22px; border-radius: 99px; position: relative;
+  background: var(--axis); transition: background 0.2s;
+}
+.rp-switch .sw::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 5px rgba(0, 23, 55, 0.35); transition: transform 0.2s;
+}
+.rp-switch input:checked + .sw { background: var(--accent); }
+.rp-switch input:checked + .sw::after { transform: translateX(16px); }
+.rp-switch input:focus-visible + .sw { box-shadow: 0 0 0 4px var(--accent-soft); }
+
+.rp-actions { display: flex; flex-direction: column; gap: 8px; }
+.rp-actions .btn { width: 100%; justify-content: center; }
+.rp-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 2px 2px 0; }
+
+.combine-card .combine-item { border: none; padding: 9px 0; gap: 10px; align-items: center; }
+.combine-card .combine-item .ci-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.combine-card .combine-item .ci-body b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* คอลัมน์ขวา = แผงเอกสาร */
+.report-main {
+  border-radius: var(--r); overflow: hidden;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+}
+.rp-docbar {
+  display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.rp-dots { display: inline-flex; gap: 6px; }
+.rp-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--axis); }
+.rp-dots i:nth-child(1) { background: #e0655a; } .rp-dots i:nth-child(2) { background: #e5b23a; } .rp-dots i:nth-child(3) { background: #4aa06a; }
+.rp-docname { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+.rp-docname svg.lucide { width: 14px; height: 14px; color: var(--accent); }
+.rp-pages { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.report-scroll { max-height: calc(100vh - 150px); overflow-y: auto; padding: 26px; display: flex; justify-content: center; }
+.report-scroll .paper { margin: 0; box-shadow: 0 10px 40px -12px rgba(0, 23, 55, 0.35); }
+
+@media (max-width: 960px) {
+  .report-layout { grid-template-columns: 1fr; }
+  .report-side { position: static; }
+  .report-scroll { max-height: none; padding: 16px; }
+  .report-scroll .paper { padding: 36px 28px; }
+}
+
+/* ============================================================
+   แอนิเมชัน
+   ============================================================ */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes slideL { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@keyframes slideR { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes blockIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* เนื้อหาเลื่อนเข้าเมื่อเปลี่ยนแท็บ (ไล่ทีละก้อน) */
+.anim-page > * { animation: fadeUp 0.42s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.anim-page > *:nth-child(2) { animation-delay: 0.05s; }
+.anim-page > *:nth-child(3) { animation-delay: 0.1s; }
+.anim-page > *:nth-child(4) { animation-delay: 0.15s; }
+.anim-page > *:nth-child(n+5) { animation-delay: 0.2s; }
+
+.anim-slide-l { animation: slideL 0.44s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.anim-slide-r { animation: slideR 0.44s cubic-bezier(0.2, 0.7, 0.3, 1) 0.06s both; }
+.anim-block { animation: blockIn 0.4s ease both; }
+
+/* hover ยกตัว (ทั่วไป) */
+.chip, .side-btn, .btn { will-change: transform; }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-page > *, .anim-slide-l, .anim-slide-r, .anim-block { animation: none !important; }
+  * { scroll-behavior: auto !important; }
+}

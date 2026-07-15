@@ -1049,6 +1049,7 @@ function renderFilterBar() {
 
 function switchTab(name) {
   state.activeTab = name;
+  state._justSwitched = true;
   $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== "panel-" + name));
   renderActiveTab();
@@ -1066,6 +1067,8 @@ function renderActiveTab() {
     report: renderReport, history: renderHistory,
   }[state.activeTab];
   render(panel, rows);
+  panel.classList.remove("anim-page");
+  if (state._justSwitched) { void panel.offsetWidth; panel.classList.add("anim-page"); state._justSwitched = false; }
   refreshIcons();
 }
 
@@ -1789,33 +1792,62 @@ function datasetBlocks(ds, num, rk) {
 }
 
 function renderReport(panel, rows) {
-  const controls = document.createElement("div");
-  controls.className = "report-controls";
-  controls.innerHTML = `
-    <input type="text" id="projName" placeholder="พิมพ์ชื่อโครงการ เช่น ค่ายวิศวฯ สานฝันสู่ชนบท ครั้งที่ 12 (จะปรากฏในหัวรายงาน)" value="${esc(state.projectName)}">
-    <label class="ck">กราฟ:
-      <select id="selChartStyle" class="coltype">
-        <option value="mean" ${state.reportOpts.chartStyle === "mean" ? "selected" : ""}>ค่าเฉลี่ยรายข้อ</option>
-        <option value="likert" ${state.reportOpts.chartStyle === "likert" ? "selected" : ""}>การกระจายคะแนน (%)</option>
-        <option value="both" ${state.reportOpts.chartStyle === "both" ? "selected" : ""}>ทั้งสองแบบ</option>
-        <option value="none" ${state.reportOpts.charts ? "" : "selected"}>ไม่แนบกราฟ</option>
-      </select></label>
-    <label class="ck"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}> แสดงความถี่รายระดับ (5–1) ในตาราง</label>
-    <label class="ck"><input type="checkbox" id="ckThai" ${state.reportOpts.thaiNum ? "checked" : ""}> ใช้เลขไทย</label>
-    <button class="btn primary" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกรายงานทั้งหมด</button>
-    <button class="btn" id="btnDoc"><i data-lucide="download"></i> ดาวน์โหลด .doc</button>
-    <button class="btn" id="btnPrint"><i data-lucide="printer"></i> พิมพ์ / PDF</button>`;
-  panel.appendChild(controls);
+  const blocks = buildReportBlocks(rows);
+  if (state.reportOpts.thaiNum) blocks.forEach((b) => { b.html = toThaiDigits(b.html); });
+  const allHtml = () => blocks.map((b) => b.html).join("");
+  const cs = state.reportOpts.chartStyle;
+  const chartVal = state.reportOpts.charts ? cs : "none";
 
-  const hint = document.createElement("p");
-  hint.className = "card-sub";
-  hint.style.margin = "0 0 12px";
-  hint.textContent = "ชี้เมาส์ที่แต่ละส่วนแล้วกด \"คัดลอกส่วนนี้\" หรือคัดลอกทั้งหมดแล้วไปวางใน Microsoft Word ได้เลย — เมื่อวางใน Word ตัวอักษรจะเป็น TH Sarabun 16pt และตัวเลขเป็นเลขอารบิกตามแบบเอกสารราชการ (พรีวิวหน้านี้แสดงด้วยฟอนต์ระบบ)" + (activeFilterText() ? ` · กำลังใช้ตัวกรอง: ${activeFilterText()}` : "");
-  panel.appendChild(hint);
+  const layout = document.createElement("div");
+  layout.className = "report-layout";
+  layout.innerHTML = `
+    <aside class="report-side anim-slide-l">
+      <div class="rp-card">
+        <div class="rp-title"><i data-lucide="settings-2"></i> ตั้งค่ารายงาน</div>
+        <label class="rp-field"><span>ชื่อโครงการ</span>
+          <input type="text" id="projName" placeholder="เช่น ค่ายวิศวฯ สานฝันสู่ชนบท ครั้งที่ 12" value="${esc(state.projectName)}"></label>
+        <label class="rp-field"><span>รูปแบบกราฟในเอกสาร</span>
+          <select id="selChartStyle" class="coltype">
+            <option value="mean" ${chartVal === "mean" ? "selected" : ""}>ค่าเฉลี่ยรายข้อ</option>
+            <option value="likert" ${chartVal === "likert" ? "selected" : ""}>การกระจายคะแนน (%)</option>
+            <option value="both" ${chartVal === "both" ? "selected" : ""}>ทั้งสองแบบ</option>
+            <option value="none" ${chartVal === "none" ? "selected" : ""}>ไม่แนบกราฟ</option>
+          </select></label>
+        <div class="rp-toggles">
+          <label class="rp-switch"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}><span class="sw"></span> แสดงความถี่รายระดับ (5–1) ในตาราง</label>
+          <label class="rp-switch"><input type="checkbox" id="ckThai" ${state.reportOpts.thaiNum ? "checked" : ""}><span class="sw"></span> ใช้เลขไทยในเอกสาร</label>
+        </div>
+      </div>
+      <div id="combineBox"></div>
+      <div class="rp-actions">
+        <button class="btn primary" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกทั้งหมด</button>
+        <button class="btn" id="btnDoc"><i data-lucide="download"></i> ดาวน์โหลด .docx</button>
+        <button class="btn" id="btnPrint"><i data-lucide="printer"></i> พิมพ์ / PDF</button>
+      </div>
+      <p class="rp-hint">คัดลอกหรือดาวน์โหลด .docx แล้วเปิดใน Microsoft Word ได้ทันที — ฟอนต์ TH Sarabun 16pt เลขอารบิก ตามแบบเอกสารราชการ${activeFilterText() ? ` · ตัวกรอง: ${esc(activeFilterText())}` : ""}</p>
+    </aside>
+    <div class="report-main anim-slide-r">
+      <div class="rp-docbar">
+        <span class="rp-dots"><i></i><i></i><i></i></span>
+        <span class="rp-docname"><i data-lucide="file-text"></i> ตัวอย่างเอกสาร · A4</span>
+        <span class="rp-pages">${blocks.length} ส่วน</span>
+      </div>
+      <div class="report-scroll"><div class="paper"></div></div>
+    </div>`;
+  panel.appendChild(layout);
 
-  // โครงการที่ใช้แบบประเมินหลายชุด: เลือกไฟล์อื่นจากประวัติมารวมในเล่มเดียว
-  const combineBox = document.createElement("div");
-  panel.appendChild(combineBox);
+  const paper = $(".paper", layout);
+  blocks.forEach((b, i) => {
+    const div = document.createElement("div");
+    div.className = "report-block anim-block";
+    div.style.animationDelay = (60 + i * 45) + "ms";
+    div.innerHTML = `<button class="btn small blk-copy"><i data-lucide="copy"></i> คัดลอกส่วนนี้</button>` + b.html;
+    $(".blk-copy", div).onclick = () => copyHtmlToClipboard(b.html);
+    paper.appendChild(div);
+  });
+
+  // การ์ดรวมหลายแบบประเมิน (โหลดจากประวัติแบบ async)
+  const combineBox = $("#combineBox", layout);
   (async () => {
     let sessions = [];
     try { sessions = await dbGetAll("sessions"); } catch { /* noop */ }
@@ -1823,46 +1855,27 @@ function renderReport(panel, rows) {
     if (!sessions.length) return;
     const sameProj = (s) => s.projectName && state.projectName && s.projectName.trim() === state.projectName.trim();
     sessions.sort((a, b) => (sameProj(b) ? 1 : 0) - (sameProj(a) ? 1 : 0));
-    combineBox.className = "card combine-card";
+    combineBox.className = "rp-card combine-card";
     combineBox.innerHTML = `
-      <h3><i data-lucide="layers"></i> รวมหลายแบบประเมินในเล่มเดียว</h3>
-      <p class="card-sub">ติ๊กเลือกแบบประเมินอื่นจากประวัติเพื่อต่อท้ายรายงานนี้ (เลขตาราง/แผนภูมิต่อเนื่องกันทั้งเล่ม) — ไฟล์ที่หัวตารางเหมือนกันจะถูกรวมเป็นข้อมูลชุดเดียวโดยอัตโนมัติ</p>
+      <div class="rp-title"><i data-lucide="layers"></i> รวมหลายแบบประเมิน</div>
+      <p class="card-sub" style="margin:0 0 8px">เลือกแบบประเมินอื่นมาต่อท้ายรายงานนี้ในเล่มเดียว (เลขตาราง/แผนภูมิต่อเนื่องกัน)</p>
       ${sessions.map((s) => `
-        <label class="ck combine-item">
-          <input type="checkbox" data-sess="${s.id}" ${state.reportExtraIds.has(s.id) ? "checked" : ""}>
-          <b>${esc(s.projectName || s.fileName)}</b>
-          <span class="sugg-count">· ${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH")}</span>
+        <label class="rp-switch combine-item">
+          <input type="checkbox" data-sess="${s.id}" ${state.reportExtraIds.has(s.id) ? "checked" : ""}><span class="sw"></span>
+          <span class="ci-body"><b>${esc(s.projectName || s.fileName)}</b>
+          <span class="sugg-count">${s.rows.length} คำตอบ · ${new Date(s.savedAt).toLocaleDateString("th-TH")}</span></span>
           ${sameProj(s) ? '<span class="lv l4">โครงการเดียวกัน</span>' : ""}
         </label>`).join("")}`;
     refreshIcons();
     $$("input[data-sess]", combineBox).forEach((cb) => {
       cb.onchange = () => {
         const id = cb.dataset.sess;
-        if (cb.checked) {
-          const rec = sessions.find((s) => s.id === id);
-          state._extraCache[id] = datasetFromRecord(rec);
-          state.reportExtraIds.add(id);
-        } else {
-          state.reportExtraIds.delete(id);
-        }
+        if (cb.checked) { state._extraCache[id] = datasetFromRecord(sessions.find((x) => x.id === id)); state.reportExtraIds.add(id); }
+        else state.reportExtraIds.delete(id);
         renderActiveTab();
       };
     });
   })();
-
-  const paper = document.createElement("div");
-  paper.className = "paper";
-  panel.appendChild(paper);
-
-  const blocks = buildReportBlocks(rows);
-  if (state.reportOpts.thaiNum) blocks.forEach((b) => { b.html = toThaiDigits(b.html); });
-  blocks.forEach((b) => {
-    const div = document.createElement("div");
-    div.className = "report-block";
-    div.innerHTML = `<button class="btn small blk-copy"><i data-lucide="copy"></i> คัดลอกส่วนนี้</button>` + b.html;
-    $(".blk-copy", div).onclick = () => copyHtmlToClipboard(b.html);
-    paper.appendChild(div);
-  });
 
   $("#projName").onchange = (e) => { state.projectName = e.target.value; saveSessionSnapshot(); renderActiveTab(); };
   $("#selChartStyle").onchange = (e) => {
@@ -1872,9 +1885,9 @@ function renderReport(panel, rows) {
   };
   $("#ckFreq").onchange = (e) => { state.reportOpts.freq = e.target.checked; renderActiveTab(); };
   $("#ckThai").onchange = (e) => { state.reportOpts.thaiNum = e.target.checked; renderActiveTab(); };
-  $("#btnCopyAll").onclick = () => copyHtmlToClipboard(blocks.map((b) => b.html).join(""));
+  $("#btnCopyAll").onclick = () => copyHtmlToClipboard(allHtml());
   $("#btnPrint").onclick = () => window.print();
-  $("#btnDoc").onclick = () => downloadDoc(blocks.map((b) => b.html).join(""));
+  $("#btnDoc").onclick = () => downloadDocx(allHtml());
 }
 
 /* ============================================================
@@ -2099,16 +2112,94 @@ async function copyHtmlToClipboard(innerHtml) {
 }
 
 /* ---------- ดาวน์โหลดเป็น .doc (Word เปิดได้) ---------- */
-function downloadDoc(innerHtml) {
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>@page{size:A4;margin:2.5cm 2cm 2cm 3cm;} body{${W_FONT}font-size:16pt;}</style></head><body>${innerHtml}</body></html>`;
-  const blob = new Blob(["﻿" + html], { type: "application/msword" });
+/* ---------- สร้างไฟล์ .docx จริง (OOXML) — ฝัง HTML ผ่าน altChunk ----------
+   Word เวอร์ชันใหม่เปิดได้โดยไม่มีคำเตือน "รูปแบบเก่า" ต่างจาก .doc เดิม
+   ตาราง/ฟอนต์/รูปกราฟ (data URI) ถูกนำเข้าโดยกลไกอ่าน HTML ของ Word */
+const _crcTable = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xffffffff;
+  for (let i = 0; i < u8.length; i++) c = _crcTable[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const _u8 = (str) => new TextEncoder().encode(str);
+
+/** zip แบบ store (ไม่บีบอัด) — พอสำหรับ .docx ขนาดเล็ก และ Word เปิดได้ */
+function zipStore(files) {
+  const body = [], central = [];
+  let offset = 0;
+  const w16 = (a, n) => a.push(n & 255, (n >>> 8) & 255);
+  const w32 = (a, n) => a.push(n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255);
+  for (const f of files) {
+    const name = _u8(f.name);
+    const data = typeof f.data === "string" ? _u8(f.data) : f.data;
+    const crc = crc32(data);
+    const lh = [];
+    w32(lh, 0x04034b50); w16(lh, 20); w16(lh, 0x0800); w16(lh, 0); w16(lh, 0); w16(lh, 0);
+    w32(lh, crc); w32(lh, data.length); w32(lh, data.length); w16(lh, name.length); w16(lh, 0);
+    const lhU = new Uint8Array(lh);
+    body.push(lhU, name, data);
+    const ch = [];
+    w32(ch, 0x02014b50); w16(ch, 20); w16(ch, 20); w16(ch, 0x0800); w16(ch, 0); w16(ch, 0); w16(ch, 0);
+    w32(ch, crc); w32(ch, data.length); w32(ch, data.length);
+    w16(ch, name.length); w16(ch, 0); w16(ch, 0); w16(ch, 0); w16(ch, 0); w32(ch, 0); w32(ch, offset);
+    central.push(new Uint8Array(ch), name);
+    offset += lhU.length + name.length + data.length;
+  }
+  const cenStart = offset;
+  const cenSize = central.reduce((a, c) => a + c.length, 0);
+  const eocd = [];
+  w32(eocd, 0x06054b50); w16(eocd, 0); w16(eocd, 0);
+  w16(eocd, files.length); w16(eocd, files.length);
+  w32(eocd, cenSize); w32(eocd, cenStart); w16(eocd, 0);
+  return new Blob([...body, ...central, new Uint8Array(eocd)],
+    { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+function makeDocx(innerHtml) {
+  const htmlDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>@page{size:A4;margin:2.5cm 2cm 2cm 3cm;} body{${W_FONT}font-size:16pt;}</style></head><body>${innerHtml}</body></html>`;
+  const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  return zipStore([
+    { name: "[Content_Types].xml", data: XML +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Default Extension="html" ContentType="text/html"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>' },
+    { name: "_rels/.rels", data: XML +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+      '</Relationships>' },
+    { name: "word/_rels/document.xml.rels", data: XML +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="htmlChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.html"/>' +
+      '</Relationships>' },
+    { name: "word/document.xml", data: XML +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<w:body><w:altChunk r:id="htmlChunk"/>' +
+      '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1418" w:right="1134" w:bottom="1134" w:left="1701" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>' +
+      '</w:body></w:document>' },
+    { name: "word/afchunk.html", data: htmlDoc },
+  ]);
+}
+
+function downloadDocx(innerHtml) {
+  const blob = makeDocx(innerHtml);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   const name = state.projectName.trim() ? `รายงานผลประเมิน-${state.projectName.trim()}` : "รายงานผลประเมินโครงการ";
-  a.download = `${name}.doc`;
+  a.download = `${name}.docx`;
   a.click();
-  URL.revokeObjectURL(a.href);
-  toast("ดาวน์โหลดไฟล์ .doc แล้ว");
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  toast("ดาวน์โหลดไฟล์ .docx แล้ว");
 }
 
 /* ============================================================
