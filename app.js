@@ -1303,9 +1303,30 @@ function renderFilterBar() {
   });
 }
 
+/** กลับหน้าแรก (ก่อนเปิดไฟล์) — คลิกโลโก้ */
+function goHome() {
+  $("#workspace").classList.add("hidden");
+  $("#emptyState").classList.remove("hidden");
+  $("#fileInfo").classList.add("hidden");
+  $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === "dashboard"));
+  state.activeTab = "dashboard";
+  renderHistoryHome();
+  const es = $("#emptyState");
+  es.classList.remove("anim-page"); void es.offsetWidth; es.classList.add("anim-page");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function switchTab(name) {
+  // ยังไม่มีข้อมูล + อยู่หน้าแรก → คลิกแท็บให้กลับหน้าแรก (ไม่เข้าพื้นที่ว่าง)
+  if ((!state.rows || !state.rows.length) && !$("#emptyState").classList.contains("hidden")) { goHome(); return; }
   state.activeTab = name;
   state._justSwitched = true;
+  // มีข้อมูลแล้วแต่กำลังดูหน้าแรกอยู่ → กลับเข้าพื้นที่วิเคราะห์
+  if (!$("#emptyState").classList.contains("hidden")) {
+    $("#emptyState").classList.add("hidden");
+    $("#workspace").classList.remove("hidden");
+    $("#fileInfo").classList.remove("hidden");
+  }
   $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== "panel-" + name));
   renderActiveTab();
@@ -2528,9 +2549,14 @@ function init() {
   $("#btnMerge").onclick = openMergeModal;
   $("#btnUnmerge").onclick = undoMerge;
   $("#btnSendReview").onclick = () => exportProject(false);
+  const brand = document.querySelector(".side-logo");
+  if (brand) { brand.style.cursor = "pointer"; brand.title = "กลับหน้าแรก"; brand.onclick = goHome; }
   $("#btnConnectSheet").onclick = openSheetModal;
   $("#btnSync").onclick = syncSheet;
   purgeOldSessions().then(renderHistoryHome);
+  // หน้าแรกครั้งแรกเลื่อนเข้า
+  const es0 = $("#emptyState");
+  if (es0 && !es0.classList.contains("hidden")) { es0.classList.remove("anim-page"); void es0.offsetWidth; es0.classList.add("anim-page"); }
   refreshIcons();
 }
 init();
