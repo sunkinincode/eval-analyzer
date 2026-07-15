@@ -743,3 +743,20 @@ svg.lucide { width: 15px; height: 15px; stroke-width: 2; vertical-align: -2.5px;
   .anim-page > *, .anim-slide-l, .anim-slide-r, .anim-block { animation: none !important; }
   * { scroll-behavior: auto !important; }
 }
+
+/* ===== แถบตรวจงาน (.evalproj) ===== */
+.review-card { border-left: 3px solid var(--accent); }
+.rv-ta {
+  width: 100%; margin-top: 10px; min-height: 76px; resize: vertical;
+  font-family: inherit; font-size: 13.5px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--glass-border); background: var(--surface-1); color: var(--text-primary);
+}
+.rv-ta:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.rv-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ===== ตั้งค่า Google Sheet ในโมดัล ===== */
+.gs-setup { margin: 4px 0 16px; border: 1px solid var(--glass-border); border-radius: 12px; padding: 4px 12px; background: var(--surface-2); }
+.gs-setup summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-secondary); padding: 8px 0; }
+.gs-setup ol { margin: 4px 0 8px; padding-left: 20px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.7; }
+.gs-setup code { background: var(--accent-soft); color: var(--accent); padding: 1px 6px; border-radius: 6px; font-size: 11.5px; word-break: break-all; }
+.gs-setup label { margin-bottom: 0; }

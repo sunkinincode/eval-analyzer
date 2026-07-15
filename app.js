@@ -95,6 +95,9 @@ const state = {
   reportExtraIds: new Set(), // id ประวัติของแบบประเมินอื่นที่เลือกมารวมในเล่มเดียว
   _extraCache: {},           // ข้อมูลชุดอื่นที่โหลดมาแล้ว (id → dataset)
   mergedFrom: [],            // ชื่อชุดข้อมูลที่ถูกผนวกเข้ากับชุดปัจจุบัน (ระดับแอป)
+  source: "file",            // file | gsheet | evalproj
+  review: null,              // ผลการตรวจงาน (จากไฟล์ .evalproj)
+  reviewMeta: null,          // ข้อมูลผู้ส่งงานมาตรวจ
   mergedIds: new Set(),      // id ประวัติที่ผนวกไปแล้ว — กันผนวกซ้ำ
   _preMerge: null,           // สำเนาข้อมูลก่อนผนวกครั้งแรก — ไว้กด "เลิกผนวก"
 };
@@ -370,6 +373,12 @@ async function saveSessionSnapshot() {
    โหลดไฟล์
    ============================================================ */
 function handleFile(file) {
+  if (/\.(evalproj|json)$/i.test(file.name)) {
+    const r = new FileReader();
+    r.onload = (e) => { try { importProject(JSON.parse(e.target.result), file.name.replace(/\.[^.]+$/, "")); } catch { toast("อ่านไฟล์ตรวจงานไม่สำเร็จ"); } };
+    r.readAsText(file);
+    return;
+  }
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
@@ -412,7 +421,13 @@ function loadSheet(sheetName, opts = {}) {
   const ws = state.workbook.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true, blankrows: false });
   if (!aoa.length) { toast("ชีตนี้ไม่มีข้อมูล"); return; }
-  state.sheetName = sheetName;
+  ingestAoA(aoa, { ...opts, sheetName, workbookForScan: state.workbook });
+}
+
+/** แกนกลางอ่านข้อมูลแบบ AoA (array-of-arrays) — ใช้ร่วมกันทั้งไฟล์ xlsx, Google Sheet, และไฟล์ตรวจงาน */
+function ingestAoA(aoa, opts = {}) {
+  state.sheetName = opts.sheetName || "";
+  if (!opts.keepReview) { state.source = opts.source || "file"; state.review = null; state.reviewMeta = null; }
 
   // หาแถวหัวตาราง: บางไฟล์มีแถวชื่อเรื่อง/แถวว่างนำหน้า — เลือกแถวแรกใน 10 แถวแรก
   // ที่มีจำนวนช่องไม่ว่างอย่างน้อย 60% ของแถวที่แน่นที่สุด
@@ -463,7 +478,7 @@ function loadSheet(sheetName, opts = {}) {
   state.filterSel = {};
   state.projectName = opts.projectName ?? state.projectName;
   state.activeTab = "dashboard";
-  if (!opts.fromHistory) state.respTarget = scanRespondTarget(state.workbook, sheetName, state.rows.length);
+  if (!opts.fromHistory) state.respTarget = opts.workbookForScan ? scanRespondTarget(opts.workbookForScan, state.sheetName, state.rows.length) : (opts.respTarget ?? null);
   state.reportExtraIds = new Set();
   state.mergedFrom = [];
   state.mergedIds = new Set();
@@ -497,6 +512,245 @@ function loadSheet(sheetName, opts = {}) {
   } else {
     state.sessionId = opts.sessionId;
   }
+}
+
+/* ============================================================
+   เชื่อม Google Sheet แบบเรียลไทม์ (ดึงตรง เบราว์เซอร์ ↔ Google)
+   ต้องมี OAuth Client ID ของผู้ใช้เอง (ตั้งค่าครั้งเดียวใน Google Cloud)
+   ============================================================ */
+const GS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly openid email profile";
+const getClientId = () => { try { return localStorage.getItem("gClientId") || ""; } catch { return ""; } };
+const setClientId = (v) => { try { localStorage.setItem("gClientId", v); } catch { /* noop */ } };
+function extractSheetId(url) {
+  const m = String(url).match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  return /^[a-zA-Z0-9_-]{20,}$/.test(String(url).trim()) ? String(url).trim() : null;
+}
+let _gsiPromise = null;
+function gsiLoad() {
+  if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+  if (_gsiPromise) return _gsiPromise;
+  _gsiPromise = new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = "https://accounts.google.com/gsi/client";
+    sc.async = true; sc.defer = true;
+    sc.onload = () => resolve();
+    sc.onerror = () => reject(new Error("gsi load failed"));
+    document.head.appendChild(sc);
+  });
+  return _gsiPromise;
+}
+
+function openSheetModal() {
+  const cid = getClientId();
+  const origin = location.origin;
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.innerHTML = `<div class="modal modal-wide">
+    <h2><i data-lucide="table-2"></i> เชื่อม Google Sheet</h2>
+    <p>ดึงคำตอบตรงจาก Google Sheet ของฟอร์ม แล้วกด “ซิงค์” เมื่อไรก็ได้ค่าล่าสุด — ข้อมูลวิ่งตรงระหว่างเบราว์เซอร์กับ Google ไม่ผ่านเซิร์ฟเวอร์ของเรา</p>
+    <label>ลิงก์ Google Sheet
+      <input type="text" id="gsUrl" placeholder="วางลิงก์ https://docs.google.com/spreadsheets/d/..."></label>
+    <details class="gs-setup" ${cid ? "" : "open"}>
+      <summary>ตั้งค่าครั้งแรก (ทำครั้งเดียว) ${cid ? "· ตั้งค่าไว้แล้ว ✓" : ""}</summary>
+      <ol>
+        <li>เปิด <b>console.cloud.google.com</b> → สร้างโปรเจกต์</li>
+        <li>เมนู APIs &amp; Services → Library → เปิดใช้ <b>Google Sheets API</b></li>
+        <li>OAuth consent screen → เลือก External → เพิ่มอีเมลตัวเองใน <b>Test users</b></li>
+        <li>Credentials → Create → <b>OAuth client ID</b> → ประเภท <b>Web application</b><br>
+            ช่อง Authorized JavaScript origins ใส่: <code>${esc(origin)}</code> และ <code>https://sunkinincode.github.io</code></li>
+        <li>คัดลอก <b>Client ID</b> มาวางด้านล่าง</li>
+      </ol>
+      <label>OAuth Client ID
+        <input type="text" id="gsClient" value="${esc(cid)}" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
+    </details>
+    <button class="btn primary" id="gsConnect"><i data-lucide="link"></i> เชื่อมและดึงข้อมูล</button>
+    <button class="btn" id="gsClose">ปิด</button>
+  </div>`;
+  document.body.appendChild(ov);
+  refreshIcons();
+  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+  $("#gsClose", ov).onclick = () => ov.remove();
+  $("#gsConnect", ov).onclick = () => {
+    const url = $("#gsUrl", ov).value.trim();
+    const clientId = ($("#gsClient", ov) ? $("#gsClient", ov).value.trim() : "") || cid;
+    connectSheet(url, clientId, ov);
+  };
+}
+
+async function connectSheet(url, clientId, ov) {
+  const id = extractSheetId(url);
+  if (!id) { toast("ลิงก์ Google Sheet ไม่ถูกต้อง"); return; }
+  if (!clientId) { toast('ใส่ OAuth Client ID ก่อน (ดูวิธีในกล่อง “ตั้งค่าครั้งแรก”)'); return; }
+  setClientId(clientId);
+  try { await gsiLoad(); } catch { toast("โหลด Google ไม่สำเร็จ — ตรวจการเชื่อมต่ออินเทอร์เน็ต"); return; }
+  toast("กำลังขอสิทธิ์เข้าถึง Google Sheet…");
+  try {
+    const tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId, scope: GS_SCOPE,
+      callback: async (resp) => {
+        if (resp.error) { toast("อนุญาต Google ไม่สำเร็จ: " + resp.error); return; }
+        state.gsheet = { id, token: resp.access_token, tokenAt: Date.now(), clientId };
+        if (ov) ov.remove();
+        await gsAfterAuth(true);
+      },
+    });
+    state._tokenClient = tokenClient;
+    tokenClient.requestAccessToken({ prompt: "" });
+  } catch (e) { console.error(e); toast("เริ่มการเชื่อมต่อ Google ไม่สำเร็จ"); }
+}
+
+async function gsFetch(path) {
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + state.gsheet.token } });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+async function gsAfterAuth(withIdentity) {
+  try {
+    if (withIdentity) {
+      try {
+        const info = await (await fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: "Bearer " + state.gsheet.token } })).json();
+        if (info && info.name) { state.user = { name: info.name, role: info.email || "" }; localStorage.setItem("evalUser", JSON.stringify(state.user)); updateUserChip(); touchUser(); }
+      } catch { /* ตัวตนไม่สำเร็จก็ยังดึงชีตต่อได้ */ }
+    }
+    const meta = await gsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.gsheet.id}?fields=properties.title,sheets.properties(title,gridProperties(rowCount,columnCount))`);
+    // เลือกชีตที่ใหญ่ที่สุด
+    let best = meta.sheets[0].properties.title, bestScore = -1;
+    for (const sh of meta.sheets) {
+      const g = sh.properties.gridProperties || {};
+      const score = (g.rowCount || 0) * (g.columnCount || 0);
+      if (score > bestScore) { bestScore = score; best = sh.properties.title; }
+    }
+    state.gsheet.title = meta.properties.title;
+    state.gsheet.sheetTitle = best;
+    state.fileName = meta.properties.title + " (Google Sheet)";
+    await gsPullValues();
+    toast("เชื่อม Google Sheet แล้ว — กดปุ่มซิงค์เพื่อดึงค่าล่าสุดได้ทุกเมื่อ");
+  } catch (e) { console.error(e); toast("อ่าน Google Sheet ไม่สำเร็จ (สิทธิ์/ลิงก์/แชร์ไฟล์)"); }
+}
+
+async function gsPullValues() {
+  const range = `'${state.gsheet.sheetTitle}'`;
+  const data = await gsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.gsheet.id}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
+  const aoa = data.values || [];
+  if (!aoa.length) { toast("ชีตนี้ยังไม่มีข้อมูล"); return; }
+  ingestAoA(aoa, { sheetName: state.gsheet.sheetTitle, source: "gsheet" });
+  $("#fileName").textContent = state.fileName + " · เชื่อมสด";
+}
+
+async function syncSheet() {
+  if (!state.gsheet) return;
+  // token อายุ ~1 ชม. — ขอใหม่แบบเงียบถ้าใกล้หมด
+  if (Date.now() - state.gsheet.tokenAt > 55 * 60 * 1000 && state._tokenClient) {
+    state._tokenClient.callback = async (resp) => {
+      if (resp.error) { toast("ต่ออายุสิทธิ์ Google ไม่สำเร็จ ลองเชื่อมใหม่"); return; }
+      state.gsheet.token = resp.access_token; state.gsheet.tokenAt = Date.now();
+      await gsSyncNow();
+    };
+    state._tokenClient.requestAccessToken({ prompt: "" });
+    return;
+  }
+  await gsSyncNow();
+}
+async function gsSyncNow() {
+  const prevSel = { ...state.filterSel };
+  try { await gsPullValues(); state.filterSel = prevSel; renderFilterBar(); renderActiveTab(); toast("ซิงค์ค่าล่าสุดแล้ว"); }
+  catch (e) { console.error(e); toast("ซิงค์ไม่สำเร็จ"); }
+}
+
+/* ============================================================
+   ไฟล์โปรเจกต์ .evalproj — ให้คนอื่นทำแล้วส่งมาให้ตรวจ / ตรวจแล้วส่งกลับ
+   (ไฟล์ JSON เดินทางเป็นไฟล์ ไม่ผ่านเซิร์ฟเวอร์ — ปลอดภัยตาม PDPA)
+   ============================================================ */
+function currentColTypes() {
+  return state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item, mergeInto: c.mergeInto ?? null, noReport: c.noReport ?? false }));
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+}
+function meLabel() {
+  return state.user ? `${state.user.name}${state.user.role ? " (" + state.user.role + ")" : ""}` : "-";
+}
+function exportProject(withReview) {
+  const obj = {
+    app: "eval-analyzer", kind: "project", version: 2,
+    exportedAt: Date.now(),
+    exportedBy: withReview ? (state.reviewMeta?.exportedBy || "-") : meLabel(),
+    projectName: state.projectName, fileName: state.fileName,
+    respTarget: state.respTarget, mergedFrom: state.mergedFrom,
+    headers: state.headers, rows: state.rows, colTypes: currentColTypes(),
+    review: withReview ? state.review : null,
+  };
+  const base = (state.projectName.trim() || state.fileName.replace(/\.[^.]+$/, "") || "โครงการ");
+  downloadBlob(new Blob([JSON.stringify(obj)], { type: "application/json" }), `${base}${withReview ? "-ตรวจแล้ว" : "-ส่งตรวจ"}.evalproj`);
+  toast(withReview ? "ส่งกลับให้เจ้าของแล้ว (.evalproj)" : "สร้างไฟล์ส่งตรวจแล้ว — ส่งไฟล์ .evalproj ให้ผู้ตรวจได้เลย");
+}
+function importProject(obj, srcName) {
+  if (!obj || obj.kind !== "project" || !Array.isArray(obj.headers) || !Array.isArray(obj.rows)) {
+    toast("ไฟล์ .evalproj ไม่ถูกต้อง"); return;
+  }
+  state.workbook = null;
+  state.fileName = obj.fileName || srcName || "โครงการตรวจงาน";
+  state.headers = obj.headers;
+  state.rows = obj.rows;
+  state.columns = detectColumns(obj.headers, obj.rows);
+  if (obj.colTypes && obj.colTypes.length === state.columns.length) state.columns.forEach((c, i) => Object.assign(c, obj.colTypes[i]));
+  updateStatusCol();
+  state.filterSel = {};
+  state.projectName = obj.projectName || "";
+  state.respTarget = obj.respTarget ?? null;
+  state.mergedFrom = obj.mergedFrom || [];
+  state.mergedIds = new Set(); state._preMerge = null; state.reportExtraIds = new Set();
+  state.source = "evalproj";
+  state.reviewMeta = { exportedBy: obj.exportedBy || "-", exportedAt: obj.exportedAt, note: obj.note || "" };
+  state.review = obj.review || null;
+  state.sessionId = (crypto.randomUUID && crypto.randomUUID()) || "id-" + Date.now();
+  bumpDataVersion();
+  $$(".panel").forEach((p) => (p.innerHTML = ""));
+  $("#emptyState").classList.add("hidden");
+  $("#workspace").classList.remove("hidden");
+  $("#fileInfo").classList.remove("hidden");
+  $("#fileName").textContent = state.fileName + " · ตรวจงาน";
+  updateFileMeta();
+  renderFilterBar();
+  switchTab("dashboard");
+  toast(state.review ? "เปิดไฟล์ที่ตรวจแล้ว" : "เปิดงานที่ส่งมาให้ตรวจ");
+}
+
+/** แถบตรวจงาน (บนแดชบอร์ด) — โหมดตรวจ หรือ แสดงผลตรวจ */
+function reviewBanner(panel) {
+  if (state.source !== "evalproj" || !state.reviewMeta) return;
+  const card = document.createElement("div");
+  card.className = "card review-card";
+  if (state.review && state.review.status) {
+    const ok = state.review.status === "ผ่าน";
+    card.innerHTML = `<h3><i data-lucide="clipboard-check"></i> ผลการตรวจงาน</h3>
+      <div class="sum-row"><span>สถานะ</span><b><span class="lv ${ok ? "l5" : "l3"}">${ok ? "✓ ผ่าน" : "✎ มีข้อแก้ไข"}</span></b></div>
+      <div class="sum-row"><span>ผู้ตรวจ</span><b>${esc(state.review.reviewedBy || "-")}</b></div>
+      ${state.review.comments && state.review.comments.length ? `<div style="margin-top:10px"><b style="font-size:13px">ความเห็น/ข้อแก้ไข</b><ul class="sugg" style="margin-top:4px">${state.review.comments.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>` : `<p class="card-sub" style="margin-top:8px">ไม่มีความเห็นเพิ่มเติม</p>`}`;
+    panel.appendChild(card);
+    return;
+  }
+  card.innerHTML = `<h3><i data-lucide="clipboard-pen"></i> กำลังตรวจงานที่ได้รับ</h3>
+    <p class="card-sub">ส่งมาโดย <b>${esc(state.reviewMeta.exportedBy)}</b> — ตรวจตัวเลข การจัดด้าน และการตั้งค่าได้ทุกหน้า เมื่อตรวจเสร็จใส่ความเห็นแล้วส่งกลับ</p>
+    <textarea id="rvComment" class="rv-ta" placeholder="ความเห็น/ข้อแก้ไข — พิมพ์หนึ่งข้อต่อหนึ่งบรรทัด (เว้นว่างได้ถ้าไม่มี)"></textarea>
+    <div class="rv-actions">
+      <button class="btn" id="rvPass"><i data-lucide="check"></i> ผ่าน — ส่งกลับ</button>
+      <button class="btn primary" id="rvFix"><i data-lucide="pen-line"></i> มีข้อแก้ไข — ส่งกลับ</button>
+    </div>`;
+  panel.appendChild(card);
+  const finish = (status) => {
+    const ta = $("#rvComment", card);
+    const comments = (ta && ta.value || "").split("\n").map((x) => x.trim()).filter(Boolean);
+    state.review = { status, comments, reviewedBy: meLabel(), reviewedAt: Date.now() };
+    exportProject(true);
+    renderActiveTab();
+  };
+  $("#rvPass", card).onclick = () => finish("ผ่าน");
+  $("#rvFix", card).onclick = () => finish("มีข้อแก้ไข");
 }
 
 function normalizeCell(v) {
@@ -579,8 +833,10 @@ function activeFilterText() {
 
 function updateFileMeta() {
   $("#fileMeta").textContent = `${state.rows.length} คำตอบ · ${state.headers.length} คอลัมน์` +
-    (state.mergedFrom?.length ? ` · ผนวกแล้ว ${state.mergedFrom.length + 1} ชุด` : "");
+    (state.mergedFrom?.length ? ` · ผนวกแล้ว ${state.mergedFrom.length + 1} ชุด` : "") +
+    (state.source === "gsheet" ? " · เชื่อมสด" : "");
   $("#btnUnmerge")?.classList.toggle("hidden", !state._preMerge);
+  $("#btnSync")?.classList.toggle("hidden", state.source !== "gsheet");
 }
 
 function filteredRows() {
@@ -1077,6 +1333,7 @@ function renderActiveTab() {
    ============================================================ */
 function renderDashboard(panel, rows) {
   const t = themeVars();
+  reviewBanner(panel);
   const overall = overallRatingStats(rows);
   const groups = ratingGroups(rows);
 
@@ -2270,6 +2527,9 @@ function init() {
   $("#btnSwitchUser").onclick = showLogin;
   $("#btnMerge").onclick = openMergeModal;
   $("#btnUnmerge").onclick = undoMerge;
+  $("#btnSendReview").onclick = () => exportProject(false);
+  $("#btnConnectSheet").onclick = openSheetModal;
+  $("#btnSync").onclick = syncSheet;
   purgeOldSessions().then(renderHistoryHome);
   refreshIcons();
 }
