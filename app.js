@@ -86,7 +86,7 @@ const state = {
   activeTab: "dashboard",
   charts: [],        // Chart instances ของแท็บที่แสดงอยู่
   projectName: "",
-  reportOpts: { charts: true, chartStyle: "mean", freq: false, thaiNum: false },
+  reportOpts: { charts: true, chartStyle: "summary", freq: false, thaiNum: false, passMark: 3.51 },
   ui: { showFreq: false },
   user: null,        // { name, role } — จาก localStorage
   sessionId: null,   // id ของรายการประวัติที่กำลังทำงานอยู่
@@ -1857,6 +1857,51 @@ function assembleReportDatasets(mainRows) {
   return parts;
 }
 
+/** เกณฑ์ความสำเร็จ (ค่าเฉลี่ยขั้นต่ำ) — ปรับได้ในแผงตั้งค่ารายงาน */
+function passMark() {
+  const v = parseFloat(state.reportOpts.passMark);
+  return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 3.51;
+}
+
+/** จัดหมวดด้านเพื่อเรียงรายงานเป็นกลุ่ม: มาตรฐานกลาง / ตามประเภทโครงการ / เฉพาะโครงการ */
+function classifyGroup(name) {
+  if (/PSU|Identity|5Hs|Holistic|คุณลักษณะ|ทักษะแห่งอนาคต|พึงพอใจต่อภาพรวม/i.test(name)) return "core";
+  if (/^ประเภท/.test(String(name).trim())) return "type";
+  return "custom";
+}
+const GROUP_CAT_LABEL = {
+  core: "ผลการประเมินมาตรฐานกลาง (PSU Identity / 5Hs / ความพึงพอใจภาพรวม)",
+  type: "ผลการประเมินตามประเภทโครงการ",
+  custom: "ผลการประเมินเฉพาะโครงการ",
+};
+
+/** ใครคือผู้ประเมินด้านนี้ — นับจากแถวที่ตอบข้อใดข้อหนึ่งของด้าน จำแนกตามสถานะผู้ตอบ */
+function respondentsOfGroup(rows, g, columns) {
+  const idxs = g.items.map((it) => it.colIdx);
+  let keyIdx = columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  if (keyIdx < 0) keyIdx = columns.findIndex((c) => c.header === "ชุดแบบประเมิน");
+  const byStatus = new Map();
+  let n = 0;
+  for (const r of rows) {
+    if (!idxs.some((i) => parseRating(r[i]) != null)) continue;
+    n++;
+    if (keyIdx >= 0) {
+      const v = rowValueCombined(r, keyIdx, columns) || "ไม่ระบุ";
+      byStatus.set(v, (byStatus.get(v) || 0) + 1);
+    }
+  }
+  const list = [...byStatus.entries()].sort((a, b) => b[1] - a[1]);
+  let text;
+  if (!list.length) {
+    text = `ผู้เข้าร่วมโครงการที่ตอบแบบประเมิน ${n} คน`;
+  } else {
+    const top = list.slice(0, 3).map(([l, c]) => `${l} ${c} คน`).join(", ");
+    const restN = list.slice(3).reduce((a, [, c]) => a + c, 0);
+    text = top + (restN ? ` และอื่น ๆ ${restN} คน` : "") + ` (รวม ${n} คน)`;
+  }
+  return { n, text };
+}
+
 function buildReportBlocks(rows) {
   const datasets = assembleReportDatasets(rows);
   const multi = datasets.length > 1;
@@ -1883,6 +1928,51 @@ function buildReportBlocks(rows) {
       wp(intro),
   });
 
+  // ---------- บทสรุปสำหรับผู้บริหาร: ตอบ "โครงการสำเร็จไหม" ตั้งแต่หน้าแรก ----------
+  const pm = passMark();
+  const execRows = [];
+  let passCount = 0, groupCount = 0;
+  datasets.forEach((ds, di) => {
+    ds.analysis.groups.forEach((g) => {
+      groupCount++;
+      const ok = g.total.mean >= pm;
+      if (ok) passCount++;
+      const who = respondentsOfGroup(ds.rows, g, ds.columns);
+      execRows.push([
+        cell((multi ? `[ชุดที่ ${di + 1}] ` : "") + esc(g.name), "left"),
+        cell(esc(who.text), "left"),
+        cell(f2(g.total.mean)), cell(f2(g.total.sd)),
+        cell(levelLabel(g.total.mean)),
+        cell(ok ? "ผ่าน" : "ไม่ผ่าน", "center", !ok),
+      ]);
+    });
+  });
+  if (groupCount) {
+    const allVals = datasets.flatMap((d) => d.analysis.groups.flatMap((g) => g._vals));
+    const grand = statsFromVals(allVals);
+    const grandOk = grand.mean >= pm;
+    const allSdgs = datasets.flatMap((d) => d.analysis.sdgs);
+    const okSdg = allSdgs.filter((x) => x.pct >= 50);
+    num.table++;
+    let ex = wp("<b>บทสรุปสำหรับผู้บริหาร</b>", { indent: false, align: "left" });
+    ex += wp(`โครงการกำหนดเกณฑ์ความสำเร็จที่ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ผลการประเมินโดยรวมอยู่ในระดับ<b>${levelLabel(grand.mean)}</b> (x̄ = ${f2(grand.mean)}, S.D. = ${f2(grand.sd)}) <b>${grandOk ? "ผ่านเกณฑ์ที่กำหนด จึงถือว่าโครงการบรรลุวัตถุประสงค์" : "ยังไม่ผ่านเกณฑ์ที่กำหนด ควรนำผลไปทบทวนการดำเนินงาน"}</b> โดยผ่านเกณฑ์ ${passCount} จากทั้งหมด ${groupCount} ด้าน${allSdgs.length ? ` และผลการดำเนินงานสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs) จำนวน ${okSdg.length} จาก ${allSdgs.length} เป้าหมายที่ประเมิน` : ""} รายละเอียดดังตารางที่ ${num.table}`);
+    ex += wCaption(num.table, `สรุปผลการประเมินรายด้าน ผู้ประเมิน และผลตามเกณฑ์ความสำเร็จ (ค่าเฉลี่ย ≥ ${pm.toFixed(2)})`);
+    ex += wTable(
+      ["ด้านการประเมิน", "ผู้ประเมิน", "x̄", "S.D.", "ระดับผล", "ผลตามเกณฑ์"],
+      [...execRows,
+       [cell("รวมทั้งโครงการ", "center", true), cell(""), cell(f2(grand.mean), "center", true), cell(f2(grand.sd), "center", true), cell(levelLabel(grand.mean), "center", true), cell(grandOk ? "ผ่าน" : "ไม่ผ่าน", "center", true)]]
+    );
+    if (state.reportOpts.charts) {
+      num.chart++;
+      const names = datasets.flatMap((d, dj) => d.analysis.groups.map((g) => (multi ? `[${dj + 1}] ` : "") + g.name));
+      const means = datasets.flatMap((d) => d.analysis.groups.map((g) => g.total.mean));
+      const url = cachedChartURL(`${rk}|exec`, () => chartToDataURL(cfgMeanBar(names, means, themeVars(true)), 860, Math.max(200, names.length * 50 + 60)));
+      ex += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
+      ex += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${num.chart}</b>&nbsp;&nbsp;เปรียบเทียบค่าเฉลี่ยผลการประเมินรายด้าน</p>`;
+    }
+    blocks.push({ title: "บทสรุปสำหรับผู้บริหาร", html: ex });
+  }
+
   // ---------- เนื้อหารายชุดข้อมูล (เลขตาราง/แผนภูมิต่อเนื่องกันทั้งเล่ม) ----------
   datasets.forEach((ds, di) => {
     if (multi) {
@@ -1901,7 +1991,7 @@ function buildReportBlocks(rows) {
   if (datasets.some((d) => d.analysis.groups.length)) {
     blocks.push({
       title: "หมายเหตุเกณฑ์การแปลผล",
-      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} และแปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
+      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} · เกณฑ์ความสำเร็จของโครงการ: ค่าเฉลี่ยตั้งแต่ ${passMark().toFixed(2)} ขึ้นไป · แปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
     });
   }
   return blocks;
@@ -1946,9 +2036,27 @@ function datasetBlocks(ds, num, rk) {
   // ---------- ตอนที่ 2 ผลการประเมิน ----------
   const groups = dsGroups;
   if (groups.length) {
-    const partHtml = [wp("<b>ตอนที่ 2  ผลการประเมินโครงการ</b>", { indent: false, align: "left" })];
+    const partHtml = [wp("<b>ตอนที่ 2  ผลการประเมินรายด้าน (รายละเอียด)</b>", { indent: false, align: "left" })];
 
-    groups.forEach((g) => {
+    // จัดหมวดด้านให้อ่านเป็นกลุ่ม: มาตรฐานกลาง → ตามประเภทโครงการ → เฉพาะโครงการ
+    const byCat = { core: [], type: [], custom: [] };
+    groups.forEach((g) => byCat[classifyGroup(g.name)].push(g));
+    const usedCats = ["core", "type", "custom"].filter((c) => byCat[c].length);
+    let subNo = 0;
+    const orderedGroups = [];
+    usedCats.forEach((cat) => {
+      if (usedCats.length > 1) {
+        subNo++;
+        orderedGroups.push({ _catHeader: `2.${subNo}  ${GROUP_CAT_LABEL[cat]}` });
+      }
+      byCat[cat].forEach((g) => orderedGroups.push(g));
+    });
+
+    orderedGroups.forEach((g) => {
+      if (g._catHeader) {
+        partHtml.push(wp(`<b>${esc(g._catHeader)}</b>`, { indent: false, align: "left" }));
+        return;
+      }
       tableNo++;
       const withFreq = state.reportOpts.freq;
       const rItems = g.items.filter((it) => it.stats.n > 0); // ตัดข้อที่ไม่มีผู้ตอบออกจากรายงาน
@@ -1967,13 +2075,16 @@ function datasetBlocks(ds, num, rk) {
       totalRow.push(cell(f2(g.total.mean), "center", true), cell(f2(g.total.sd), "center", true), cell(levelLabel(g.total.mean), "center", true));
       body.push(totalRow);
 
+      const who = respondentsOfGroup(rows, g, columns);
       let html = wCaption(tableNo, `ค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และระดับผลการประเมิน ${g.name}${withFreq ? " (ค่าในวงเล็บคือร้อยละ)" : ""}`);
+      html += `<p style="${W_P}text-align:left;margin:0 0 4pt 0;font-size:14pt;color:#333;">ผู้ประเมิน: ${esc(who.text)}</p>`;
       html += wTable(head, body);
 
       const valid = rItems;
       const best = valid.reduce((a, b) => (b.stats.mean > a.stats.mean ? b : a), valid[0]);
       const worst = valid.reduce((a, b) => (b.stats.mean < a.stats.mean ? b : a), valid[0]);
-      let narr = `จากตารางที่ ${tableNo} พบว่า ผลการประเมิน${esc(g.name)}ในภาพรวมอยู่ในระดับ${levelLabel(g.total.mean)} (x̄ = ${f2(g.total.mean)}, S.D. = ${f2(g.total.sd)})`;
+      const gPm = passMark();
+      let narr = `จากตารางที่ ${tableNo} พบว่า ผลการประเมิน${esc(g.name)}ในภาพรวมอยู่ในระดับ${levelLabel(g.total.mean)} (x̄ = ${f2(g.total.mean)}, S.D. = ${f2(g.total.sd)}) ${g.total.mean >= gPm ? "ผ่าน" : "ไม่ผ่าน"}เกณฑ์ความสำเร็จที่กำหนด (≥ ${gPm.toFixed(2)})`;
       if (valid.length > 1) narr += ` เมื่อพิจารณาเป็นรายข้อ พบว่า ข้อที่มีค่าเฉลี่ยสูงสุด คือ ${esc(best.label)} (x̄ = ${f2(best.stats.mean)}, S.D. = ${f2(best.stats.sd)}) และข้อที่มีค่าเฉลี่ยต่ำสุด คือ ${esc(worst.label)} (x̄ = ${f2(worst.stats.mean)}, S.D. = ${f2(worst.stats.sd)})`;
       html += wp(narr);
 
@@ -1995,28 +2106,7 @@ function datasetBlocks(ds, num, rk) {
       partHtml.push(html);
     });
 
-    // ตารางสรุปรวมทุกด้าน
-    if (groups.length > 1) {
-      tableNo++;
-      const overall = dsOverall;
-      let html = wCaption(tableNo, `สรุปผลการประเมินโดยรวมทุกด้าน`);
-      html += wTable(
-        ["ด้านการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"],
-        [
-          ...groups.map((g) => [cell(esc(g.name), "left"), cell(f2(g.total.mean)), cell(f2(g.total.sd)), cell(levelLabel(g.total.mean))]),
-          [cell("รวมทุกด้าน", "center", true), cell(f2(overall.mean), "center", true), cell(f2(overall.sd), "center", true), cell(levelLabel(overall.mean), "center", true)],
-        ]
-      );
-      const sortedG = [...groups].sort((a, b) => b.total.mean - a.total.mean);
-      html += wp(`จากตารางที่ ${tableNo} พบว่า ผลการประเมินโครงการโดยรวมทุกด้านอยู่ในระดับ${levelLabel(dsOverall.mean)} (x̄ = ${f2(dsOverall.mean)}, S.D. = ${f2(dsOverall.sd)}) โดยด้านที่มีค่าเฉลี่ยสูงสุด คือ ${esc(sortedG[0].name)} (x̄ = ${f2(sortedG[0].total.mean)}) และด้านที่มีค่าเฉลี่ยต่ำสุด คือ ${esc(sortedG[sortedG.length - 1].name)} (x̄ = ${f2(sortedG[sortedG.length - 1].total.mean)})`);
-      if (state.reportOpts.charts) {
-        chartNo++;
-        const url = cachedChartURL(`${rk}|${ds.key}|summary`, () => chartToDataURL(cfgMeanBar(groups.map((g) => g.name), groups.map((g) => g.total.mean), themeVars(true)), 860, Math.max(200, groups.length * 50 + 60)));
-        html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-        html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;เปรียบเทียบค่าเฉลี่ยผลการประเมินรายด้าน</p>`;
-      }
-      partHtml.push(html);
-    }
+    // (ตารางสรุปรวมย้ายไปอยู่บทสรุปสำหรับผู้บริหารด้านหน้าแล้ว)
     blocks.push({ title: "ตอนที่ 2 ผลการประเมินโครงการ", html: partHtml.join("") });
   }
 
@@ -2084,12 +2174,15 @@ function renderReport(panel, rows) {
         <div class="rp-title"><i data-lucide="settings-2"></i> ตั้งค่ารายงาน</div>
         <label class="rp-field"><span>ชื่อโครงการ</span>
           <input type="text" id="projName" placeholder="เช่น ค่ายวิศวฯ สานฝันสู่ชนบท ครั้งที่ 12" value="${esc(state.projectName)}"></label>
+        <label class="rp-field"><span>เกณฑ์ความสำเร็จ (ค่าเฉลี่ยตั้งแต่)</span>
+          <input type="number" id="passMarkInput" step="0.01" min="1" max="5" value="${passMark().toFixed(2)}"></label>
         <label class="rp-field"><span>รูปแบบกราฟในเอกสาร</span>
           <select id="selChartStyle" class="coltype">
-            <option value="mean" ${chartVal === "mean" ? "selected" : ""}>ค่าเฉลี่ยรายข้อ</option>
-            <option value="likert" ${chartVal === "likert" ? "selected" : ""}>การกระจายคะแนน (%)</option>
-            <option value="both" ${chartVal === "both" ? "selected" : ""}>ทั้งสองแบบ</option>
-            <option value="none" ${chartVal === "none" ? "selected" : ""}>ไม่แนบกราฟ</option>
+            <option value="summary" ${chartVal === "summary" ? "selected" : ""}>กราฟสรุปรวมแผนภูมิเดียว (แนะนำ)</option>
+            <option value="mean" ${chartVal === "mean" ? "selected" : ""}>+ ค่าเฉลี่ยรายข้อทุกด้าน</option>
+            <option value="likert" ${chartVal === "likert" ? "selected" : ""}>+ การกระจายคะแนนทุกด้าน (%)</option>
+            <option value="both" ${chartVal === "both" ? "selected" : ""}>+ ทั้งสองแบบทุกด้าน</option>
+            <option value="none" ${chartVal === "none" ? "selected" : ""}>ไม่แนบกราฟเลย</option>
           </select></label>
         <div class="rp-toggles">
           <label class="rp-switch"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}><span class="sw"></span> แสดงความถี่รายระดับ (5–1) ในตาราง</label>
@@ -2159,6 +2252,11 @@ function renderReport(panel, rows) {
   $("#selChartStyle").onchange = (e) => {
     state.reportOpts.charts = e.target.value !== "none";
     if (e.target.value !== "none") state.reportOpts.chartStyle = e.target.value;
+    renderActiveTab();
+  };
+  $("#passMarkInput").onchange = (e) => {
+    const v = parseFloat(e.target.value);
+    state.reportOpts.passMark = Number.isFinite(v) ? Math.min(5, Math.max(1, v)) : 3.51;
     renderActiveTab();
   };
   $("#ckFreq").onchange = (e) => { state.reportOpts.freq = e.target.checked; renderActiveTab(); };
