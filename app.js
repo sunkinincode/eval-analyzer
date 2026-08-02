@@ -105,6 +105,8 @@ const state = {
   cleanLog: [],              // บันทึกการทำความสะอาดข้อมูล (ตัดแถวซ้ำ/รวมหมวด) — ลงรายงานส่วนการจัดการข้อมูล
   mapConfirmed: false,       // ผู้ใช้ยืนยันการจำแนกชนิดคำถามแล้วหรือยัง
   fuzzyDismissed: [],        // คู่ค่าที่ผู้ใช้ยืนยันว่า "คนละค่า" — ไม่ต้องเตือนซ้ำ
+  ackIssues: [],             // รายการตรวจข้อมูลที่ผู้ใช้กด "รับทราบ" — ไม่หักคะแนนความพร้อม
+  _preClean: null,           // สำเนาแถวก่อนตัดแถวซ้ำ — ปุ่ม "เลิกทำ"
 };
 
 /* ============================================================
@@ -373,6 +375,7 @@ async function saveSessionSnapshot() {
       reportOpts: { ...state.reportOpts },
       roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
       mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
+      ackIssues: state.ackIssues,
     });
   } catch (e) { console.warn("บันทึกประวัติไม่สำเร็จ", e); }
 }
@@ -493,8 +496,9 @@ function ingestAoA(aoa, opts = {}) {
   state._preMerge = null;
   if (!opts.colTypes) {
     state.roleMap = {}; state.valueMap = {}; state.cleanLog = [];
-    state.mapConfirmed = false; state.fuzzyDismissed = [];
+    state.mapConfirmed = false; state.fuzzyDismissed = []; state.ackIssues = [];
   }
+  state._preClean = null;
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -506,6 +510,8 @@ function ingestAoA(aoa, opts = {}) {
   renderFilterBar();
   switchTab("dashboard");
   toast(`โหลดข้อมูลแล้ว ${state.rows.length} คำตอบ`);
+  // แจ้งผลตรวจข้อมูลเบื้องต้นเป็นป็อปอัป — ปิดไว้ดูภาพรวมก่อนได้ (เฉพาะไฟล์ใหม่ ไม่เด้งซ้ำตอนซิงก์/เปิดประวัติ)
+  if (!opts.colTypes && !opts.fromHistory) setTimeout(healthIntroDialog, 900);
 
   if (!opts.fromHistory) {
     state.sessionId = (crypto.randomUUID && crypto.randomUUID()) || "id-" + Date.now() + "-" + Math.random().toString(36).slice(2);
@@ -696,7 +702,7 @@ function exportProject(withReview) {
     headers: state.headers, rows: state.rows, colTypes: currentColTypes(),
     roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
     mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
-    reportOpts: { ...state.reportOpts },
+    ackIssues: state.ackIssues, reportOpts: { ...state.reportOpts },
     review: withReview ? state.review : null,
   };
   const base = (state.projectName.trim() || state.fileName.replace(/\.[^.]+$/, "") || "โครงการ");
@@ -713,6 +719,14 @@ function importProject(obj, srcName) {
   state.rows = obj.rows;
   state.columns = detectColumns(obj.headers, obj.rows);
   if (obj.colTypes && obj.colTypes.length === state.columns.length) state.columns.forEach((c, i) => Object.assign(c, obj.colTypes[i]));
+  state.roleMap = obj.roleMap || {};
+  state.valueMap = obj.valueMap || {};
+  state.cleanLog = obj.cleanLog || [];
+  state.mapConfirmed = !!obj.mapConfirmed;
+  state.fuzzyDismissed = obj.fuzzyDismissed || [];
+  state.ackIssues = obj.ackIssues || [];
+  state._preClean = null;
+  if (obj.reportOpts) state.reportOpts = { ...state.reportOpts, ...obj.reportOpts };
   updateStatusCol();
   state.filterSel = {};
   state.projectName = obj.projectName || "";
@@ -2077,33 +2091,131 @@ function computeHealth() {
 function lowConfCols() {
   return state.columns.filter((c) => c.type !== "ignore" && (c._conf ?? 1) < 0.8);
 }
+
+/** กล่องโต้ตอบกลางจอ — ใช้แทน confirm(): แสดงรายละเอียด/ผลกระทบ พร้อมปุ่ม "ไว้ภายหลัง" เสมอ */
+function showDialog({ icon = "info", title, body, buttons = [] }) {
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay dyn-modal";
+  ov.innerHTML = `<div class="modal dlg">
+    <h2><i data-lucide="${icon}"></i> ${title}</h2>
+    <div class="dlg-body">${body}</div>
+    <div class="dlg-actions"></div>
+  </div>`;
+  const act = ov.querySelector(".dlg-actions");
+  buttons.forEach((b) => {
+    const btn = document.createElement("button");
+    btn.className = "btn " + (b.cls || "");
+    btn.innerHTML = b.label;
+    btn.onclick = () => { ov.remove(); if (b.onClick) b.onClick(); };
+    act.appendChild(btn);
+  });
+  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+  refreshIcons();
+}
+
+/** รายการที่ต้องจัดการ/รับทราบทั้งหมด — ทุกข้อบอกที่ให้ไปกด และรับทราบได้ถ้าเป็นธรรมชาติของข้อมูล
+    คะแนนเต็ม 100 เมื่อทุกรายการถูก "แก้" หรือ "รับทราบ" — ไม่มีรายการลอยที่หาไม่เจอ */
 function computeReadiness() {
   const h = computeHealth();
-  const crit = [], warn = [], info = [];
-  h.issues.forEach((x) => (x.lv === "crit" ? crit : x.lv === "warn" ? warn : info).push(x.msg));
+  const items = [];
+  const add = (key, lv, msg, opts = {}) => items.push({
+    key, lv, msg,
+    tab: opts.tab || null, fixLabel: opts.fixLabel || null,
+    ackable: opts.ackable !== false,
+    ackNote: opts.ackNote || "ยืนยันว่าตรวจแล้ว — ข้อนี้จะไม่ถูกหักคะแนน",
+    acked: state.ackIssues.includes(key),
+  });
+
+  h.outOfRange.forEach((x) => add(`range|${x.header}`, "crit",
+    `"${esc(x.header.slice(0, 40))}" มีคะแนนนอกช่วง 1–5 จำนวน ${x.n} ค่า (เช่น ${x.examples.join(", ")}) — ค่าเหล่านี้ถูกตัดจากการคำนวณ`,
+    { tab: "columns", fixLabel: "ตรวจชนิดคอลัมน์", ackNote: "ยืนยันว่าค่าดังกล่าวไม่ใช่คะแนนจริง (เช่น รหัสข้อมูลว่าง) และยอมให้ตัดจากการคำนวณ" }));
+  if (h.dupHeaders.length) add("duphead", "crit",
+    `หัวคอลัมน์ซ้ำกัน: ${h.dupHeaders.slice(0, 3).map((x) => `"${esc(x.slice(0, 30))}"`).join(", ")} — ผลอาจถูกนับรวมผิดคอลัมน์`,
+    { tab: "columns", fixLabel: "ไปตั้งค่าคอลัมน์", ackNote: "ยืนยันว่าเป็นคนละคำถามจริง แม้ชื่อหัวตารางซ้ำกัน" });
   const lc = lowConfCols();
-  if (lc.length && !state.mapConfirmed) {
-    crit.push(`มี ${lc.length} คอลัมน์ที่ระบบไม่มั่นใจการจำแนกชนิด และยังไม่ได้รับการยืนยัน — ตรวจที่แท็บ "ตั้งค่าคอลัมน์" แล้วกดยืนยัน`);
-  }
-  if (!String(state.reportOpts.objectives || "").trim()) {
-    warn.push("ยังไม่ได้กำหนดวัตถุประสงค์โครงการ — รายงานจะไม่สรุปการบรรลุวัตถุประสงค์");
-  }
+  if (lc.length && !state.mapConfirmed) add("mapconfirm", "crit",
+    `มี ${lc.length} คอลัมน์ที่ระบบไม่มั่นใจการจำแนกชนิด และยังไม่ได้รับการยืนยัน`,
+    { tab: "columns", fixLabel: "ไปตรวจและกดยืนยัน", ackable: false });
+  if (h.dupRowIdx.length) add("duprows", "warn",
+    `พบแถวที่ข้อมูลซ้ำกันทั้งแถว ${h.dupRowIdx.length} แถว — อาจเป็นการกดส่งซ้ำ (ตัดได้ที่การ์ดด้านล่าง)`,
+    { ackNote: "เก็บทุกแถวไว้ — เชื่อว่าเป็นคนละคนที่ตอบเหมือนกันจริง" });
+  if (h.fuzzy.length) add("fuzzy", "warn",
+    `พบตัวเลือกที่สะกดคล้ายกัน ${h.fuzzy.length} คู่ — เลือก "รวม" หรือ "คนละค่า" รายคู่ที่การ์ดด้านล่าง`,
+    { ackable: false });
+  h.missing.filter((m) => m.pct > 20 && m.pct < 85 && state.columns[m.i]?.type !== "text").forEach((m) =>
+    add(`miss|${m.i}`, "warn", `"${esc(m.header.slice(0, 40))}" มีค่าว่าง ${m.n} ช่อง (${m.pct.toFixed(1)}%)`,
+      { ackNote: "รับทราบ — วิเคราะห์จากผู้ที่ตอบจริง (available-case) และระบุ n ในรายงาน" }));
+  h.unparsed.forEach((u) => add(`unparsed|${u.header}`, "warn",
+    `"${esc(u.header.slice(0, 40))}" มีคำตอบที่แปลงเป็นคะแนนไม่ได้ ${u.n} ค่า — ข้อนั้นถูกตัดจากการคำนวณ`,
+    { tab: "columns", fixLabel: "ตรวจชนิดคอลัมน์" }));
+  if (!String(state.reportOpts.objectives || "").trim()) add("objectives", "warn",
+    "ยังไม่ได้กำหนดวัตถุประสงค์โครงการ — รายงานจะไม่สรุปการบรรลุวัตถุประสงค์",
+    { tab: "report", fixLabel: "ไปกรอกวัตถุประสงค์", ackNote: "โครงการนี้ไม่ประสงค์สรุปการบรรลุวัตถุประสงค์ในเล่มรายงาน" });
   const statusIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
   if (statusIdx >= 0) {
     const { entries, total } = catFreq(filteredRows(), statusIdx);
-    entries.filter((e) => e.n <= 2).forEach((e) => warn.push(`กลุ่ม "${labelOfStatus(e.label)}" มีผู้ตอบเพียง ${e.n} คน — ไม่ควรตีความเป็นตัวแทนของกลุ่ม`));
-    entries.filter((e) => e.n > 2 && total && (e.n / total) < 0.05).forEach((e) => info.push(`กลุ่ม "${labelOfStatus(e.label)}" มีสัดส่วนต่ำกว่า 5% ของผู้ตอบ`));
+    entries.filter((e) => e.n <= 2).forEach((e) => add(`small|${e.label}`, "warn",
+      `กลุ่ม "${labelOfStatus(e.label)}" มีผู้ตอบเพียง ${e.n} คน — ไม่ควรตีความเป็นตัวแทนของกลุ่ม`,
+      { ackNote: "รับทราบ — รายงานระบุข้อจำกัดนี้ในส่วนวิธีการประเมินให้แล้ว" }));
+    entries.filter((e) => e.n > 2 && total && (e.n / total) < 0.05).forEach((e) =>
+      add(`imb|${e.label}`, "info", `กลุ่ม "${labelOfStatus(e.label)}" มีสัดส่วนต่ำกว่า 5% ของผู้ตอบ`));
     const unmapped = entries.filter((e) => !state.roleMap[e.label]?.role);
-    if (unmapped.length) info.push(`กลุ่มผู้ตอบ ${unmapped.length} ค่า ยังไม่ได้ระบุบทบาท (Respondent Mapping) — ระบุได้ที่แท็บ "ตั้งค่าคอลัมน์"`);
+    if (unmapped.length) add("rolemap", "info",
+      `กลุ่มผู้ตอบ ${unmapped.length} ค่า ยังไม่ได้ระบุบทบาท (ช่วยให้การแยกฐานผู้ประเมินแม่นขึ้น)`,
+      { tab: "columns", fixLabel: "ไประบุบทบาท" });
   }
-  const score = Math.max(0, 100 - crit.length * 25 - warn.length * 6 - info.length * 1);
-  return { score, crit, warn, info, level: crit.length ? "crit" : warn.length ? "warn" : "pass" };
+  h.missing.filter((m) => m.pct >= 85 && state.columns[m.i]?.type !== "text").forEach((m) =>
+    add(`misshi|${m.i}`, "info", `"${esc(m.header.slice(0, 40))}" มีผู้ตอบเพียงบางกลุ่ม (ว่าง ${m.pct.toFixed(1)}%) — ปกติสำหรับคำถามเฉพาะกลุ่ม เช่น แบบประเมินของผู้จัด`));
+  if (h.emptyHeaders.length) add("emptyhead", "info", `มีคอลัมน์หัวว่าง ${h.emptyHeaders.length} คอลัมน์ — ระบบตั้งชื่อให้อัตโนมัติแล้ว`);
+
+  const active = items.filter((x) => !x.acked);
+  const crit = active.filter((x) => x.lv === "crit").map((x) => x.msg);
+  const warn = active.filter((x) => x.lv === "warn").map((x) => x.msg);
+  const info = active.filter((x) => x.lv === "info").map((x) => x.msg);
+  // ข้อสังเกต (info) ไม่หักคะแนน — คะแนนจึงเต็ม 100 ได้จริงเมื่อจัดการ/รับทราบครบ
+  const score = Math.max(0, 100 - crit.length * 25 - warn.length * 6);
+  return { score, items, crit, warn, info, level: crit.length ? "crit" : warn.length ? "warn" : "pass", ackedCount: items.length - active.length };
+}
+
+function ackIssue(key) {
+  if (!state.ackIssues.includes(key)) state.ackIssues.push(key);
+  saveSessionSnapshot();
+  renderActiveTab();
+  toast("บันทึกการรับทราบแล้ว");
+}
+function unackIssue(key) {
+  state.ackIssues = state.ackIssues.filter((k) => k !== key);
+  saveSessionSnapshot();
+  renderActiveTab();
+}
+
+/** ป็อปอัปสรุปผลตรวจหลังโหลดไฟล์ — ดูภาพรวมก่อนได้เสมอ (ปุ่มไว้ภายหลัง) */
+function healthIntroDialog() {
+  let rd;
+  try { rd = computeReadiness(); } catch { return; }
+  const act = rd.items.filter((x) => !x.acked && x.lv !== "info");
+  if (!act.length) return;
+  showDialog({
+    icon: "activity",
+    title: "ผลตรวจข้อมูลเบื้องต้น",
+    body: `<p>ระบบตรวจพบ <b>${act.length} รายการ</b> ที่ควรดูก่อนใช้ผลวิเคราะห์:</p>` +
+      act.slice(0, 5).map((x) => `<p class="hl-issue hl-${x.lv}">${issueIcon(x.lv)} ${x.msg}</p>`).join("") +
+      (act.length > 5 ? `<p class="card-sub" style="margin-top:6px">และอีก ${act.length - 5} รายการ</p>` : "") +
+      `<p class="card-sub" style="margin-top:10px">ระบบยังไม่แก้ข้อมูลใด ๆ จนกว่าจะกดยืนยัน — ดูภาพรวมก่อนแล้วค่อยตัดสินใจได้</p>`,
+    buttons: [
+      { label: "ไว้ภายหลัง", onClick: null },
+      { label: `<i data-lucide="activity"></i> ไปที่ตรวจข้อมูล`, cls: "primary", onClick: () => switchTab("health") },
+    ],
+  });
 }
 
 /* ---------- แท็บ: ตรวจข้อมูล ---------- */
 function renderHealth(panel) {
   const h = computeHealth();
   const rd = computeReadiness();
+  const activeItems = rd.items.filter((x) => !x.acked);
+  const ackedItems = rd.items.filter((x) => x.acked);
 
   // การ์ดสรุป
   const card = cardEl(panel, "ตรวจสุขภาพข้อมูล (Data Health Check)", "ตรวจโครงสร้างและคุณภาพข้อมูลก่อนวิเคราะห์ — ระบบจะเสนอสิ่งที่ควรแก้ แต่ไม่แก้ข้อมูลเองจนกว่าจะกดยืนยัน", "activity");
@@ -2118,31 +2230,107 @@ function renderHealth(panel) {
       <div class="hlth-tile"><b>${nCat}</b><span>ตัวเลือก/หมวดหมู่</span></div>
       <div class="hlth-tile"><b>${nText}</b><span>ปลายเปิด</span></div>
       <div class="hlth-tile"><b>${h.missTotal}</b><span>ช่องว่าง (Missing)</span></div>
-      <div class="hlth-tile hlth-${h.level}"><b>${lvLabel[h.level]}</b><span>สถานะข้อมูล</span></div>
+      <div class="hlth-tile hlth-${rd.level}"><b>${lvLabel[rd.level]}</b><span>สถานะข้อมูล</span></div>
       <div class="hlth-tile hlth-${rd.level}"><b>${rd.score}/100</b><span>ความพร้อมรายงาน</span></div>
     </div>
-    ${h.issues.length ? h.issues.map((x) => `<p class="hl-issue hl-${x.lv}">${issueIcon(x.lv)} ${x.msg}</p>`).join("") : `<p class="hl-issue hl-pass">${issueIcon("pass")} ไม่พบปัญหาโครงสร้างข้อมูล</p>`}`);
+    ${rd.score >= 100
+      ? `<p class="hl-issue hl-pass">${issueIcon("pass")} <b>พร้อมใช้เอกสาร</b> — ทุกรายการถูกจัดการหรือรับทราบครบแล้ว (ข้อสังเกตทั่วไปไม่หักคะแนน)</p>`
+      : `<p class="card-sub" style="margin:0 0 4px">คะแนนจะเต็ม 100 เมื่อทุกรายการด้านล่างถูก<b>แก้</b>หรือกด<b>รับทราบ</b> — ปัญหาสำคัญหัก 25 · ข้อควรระวังหัก 6 · ข้อสังเกตไม่หักคะแนน</p>`}`);
 
-  // แถวซ้ำ
+  // รายการที่ต้องจัดการ — ทุกข้อมีปุ่มพาไปแก้ หรือปุ่มรับทราบ
+  if (activeItems.length) {
+    const c1 = cardEl(panel, `รายการที่รอจัดการ (${activeItems.length})`, "แก้ตามปุ่มของแต่ละข้อ หรือกด \"รับทราบ\" หากตรวจแล้วว่าเป็นธรรมชาติของข้อมูล", "list-checks");
+    activeItems.forEach((x) => {
+      const row = document.createElement("div");
+      row.className = `issue-row hl-issue hl-${x.lv}`;
+      row.innerHTML = `${issueIcon(x.lv)}<span class="ir-msg">${x.msg}</span>
+        <span class="ir-btns">
+          ${x.tab ? `<button class="btn small" data-go="${x.tab}">${esc(x.fixLabel || "ไปแก้")}</button>` : ""}
+          ${x.ackable ? `<button class="btn small" data-ack="${esc(x.key)}" title="${esc(x.ackNote)}">รับทราบ</button>` : ""}
+        </span>`;
+      c1.appendChild(row);
+    });
+    $$("[data-go]", c1).forEach((b) => (b.onclick = () => { if (b.dataset.go === "report") state._rpOpen = true; switchTab(b.dataset.go); }));
+    $$("[data-ack]", c1).forEach((b) => (b.onclick = () => {
+      const it = activeItems.find((x) => x.key === b.dataset.ack);
+      showDialog({
+        icon: "check-circle", title: "ยืนยันการรับทราบ",
+        body: `<p class="hl-issue hl-${it.lv}">${issueIcon(it.lv)} ${it.msg}</p><p style="margin-top:10px">${esc(it.ackNote)}</p><p class="card-sub">ข้อนี้จะย้ายไปรายการ "รับทราบแล้ว" และไม่ถูกหักคะแนน — เลิกรับทราบได้ทุกเมื่อ</p>`,
+        buttons: [
+          { label: "ไว้ภายหลัง", onClick: null },
+          { label: `<i data-lucide="check-circle"></i> รับทราบ`, cls: "primary", onClick: () => ackIssue(it.key) },
+        ],
+      });
+    }));
+  }
+
+  // รายการที่รับทราบแล้ว
+  if (ackedItems.length) {
+    const cA = cardEl(panel, `รับทราบแล้ว (${ackedItems.length})`, "รายการที่ตรวจและยืนยันแล้วว่าเป็นธรรมชาติของข้อมูล — ไม่ถูกหักคะแนน", "check-circle");
+    ackedItems.forEach((x) => {
+      const row = document.createElement("div");
+      row.className = "issue-row hl-issue hl-info acked-row";
+      row.innerHTML = `${issueIcon("pass")}<span class="ir-msg">${x.msg}</span>
+        <span class="ir-btns"><button class="btn small" data-unack="${esc(x.key)}">เลิกรับทราบ</button></span>`;
+      cA.appendChild(row);
+    });
+    $$("[data-unack]", cA).forEach((b) => (b.onclick = () => unackIssue(b.dataset.unack)));
+  }
+
+  // แถวซ้ำ — dialog แสดงผลกระทบก่อนตัด + เลิกทำได้
   if (h.dupRowIdx.length || state.cleanLog.some((x) => x.t === "dedup")) {
-    const c2 = cardEl(panel, "แถวที่ซ้ำกันทั้งแถว", "คำตอบที่เหมือนกันทุกช่องอาจเป็นการกดส่งซ้ำ — ตัดออกได้โดยระบบจะบันทึกไว้ในรายงานส่วนการจัดการข้อมูล", "copy-x");
+    const c2 = cardEl(panel, "แถวที่ซ้ำกันทั้งแถว", "คำตอบที่เหมือนกันทุกช่องอาจเป็นการกดส่งซ้ำ — กดดูผลกระทบก่อนตัดสินใจ ตัดแล้วเลิกทำได้ และไฟล์ต้นฉบับไม่ถูกแก้ไข", "copy-x");
     if (h.dupRowIdx.length) {
-      c2.insertAdjacentHTML("beforeend", `<button class="btn small" id="btnDedup"><i data-lucide="eraser"></i> ตัดแถวซ้ำ ${h.dupRowIdx.length} แถว (เหลือรายการแรกไว้)</button>`);
+      c2.insertAdjacentHTML("beforeend", `<button class="btn small primary" id="btnDedup"><i data-lucide="eraser"></i> ดูผลกระทบและตัดแถวซ้ำ ${h.dupRowIdx.length} แถว</button>`);
       $("#btnDedup", c2).onclick = () => {
-        if (!confirm(`ตัดแถวซ้ำ ${h.dupRowIdx.length} แถวออกจากการวิเคราะห์?\nการตัดจะถูกบันทึกลงรายงาน (ส่วนการจัดการข้อมูล) และย้อนกลับได้โดยเปิดไฟล์ใหม่`)) return;
+        // คำนวณผลกระทบจริงล่วงหน้า: จำนวนผู้ตอบ + ค่าเฉลี่ยรวม ก่อน/หลัง
         const del = new Set(h.dupRowIdx);
-        state.rows = state.rows.filter((_, i) => !del.has(i));
-        state.cleanLog.push({ t: "dedup", n: del.size, at: Date.now() });
-        bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
-        toast(`ตัดแถวซ้ำ ${del.size} แถวแล้ว`);
+        const afterRows = state.rows.filter((_, i) => !del.has(i));
+        const before = analyzeDataset(state.rows, state.columns).overall;
+        const after = analyzeDataset(afterRows, state.columns).overall;
+        const showIdx = state.columns.filter((c) => c.type !== "ignore").map((c) => c.i).slice(0, 3);
+        const sample = h.dupRowIdx.slice(0, 3).map((ri) =>
+          `<p class="dlg-sample">แถวที่ ${ri + 1}: ${showIdx.map((i) => esc(String(state.rows[ri][i]).slice(0, 24))).filter(Boolean).join(" · ")}</p>`).join("");
+        showDialog({
+          icon: "eraser", title: `ตัดแถวซ้ำ ${del.size} แถว — ผลกระทบต่อข้อมูล`,
+          body: `
+            <table class="impact-tbl">
+              <tr><th></th><th>ก่อนตัด</th><th></th><th>หลังตัด</th></tr>
+              <tr><td>ผู้ตอบ</td><td><b>${state.rows.length}</b> คน</td><td>→</td><td><b>${afterRows.length}</b> คน</td></tr>
+              <tr><td>ค่าเฉลี่ยรวม</td><td><b>${f2(before.mean)}</b></td><td>→</td><td><b>${f2(after.mean)}</b> (${Math.abs(after.mean - before.mean) < 0.005 ? "แทบไม่เปลี่ยน" : after.mean > before.mean ? "เพิ่มขึ้น" : "ลดลง"} ${Math.abs(after.mean - before.mean).toFixed(3)})</td></tr>
+            </table>
+            <p style="margin:10px 0 4px"><b>ตัวอย่างแถวที่จะถูกตัด</b> (เหลือรายการแรกของแต่ละชุดไว้เสมอ):</p>
+            ${sample}${del.size > 3 ? `<p class="card-sub">และอีก ${del.size - 3} แถว</p>` : ""}
+            <p class="card-sub" style="margin-top:10px">ตัดเฉพาะในการวิเคราะห์นี้ — ไฟล์ต้นฉบับในเครื่อง/Google Drive ไม่ถูกแก้ไข และกด "เลิกทำ" คืนได้ทุกเมื่อ</p>`,
+          buttons: [
+            { label: "ไว้ภายหลัง", onClick: null },
+            { label: `<i data-lucide="eraser"></i> ตัดแถวซ้ำ ${del.size} แถว`, cls: "primary", onClick: () => {
+              if (!state._preClean) state._preClean = state.rows.slice();
+              state.rows = afterRows;
+              state.cleanLog.push({ t: "dedup", n: del.size, at: Date.now() });
+              bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
+              toast(`ตัดแถวซ้ำ ${del.size} แถวแล้ว — เลิกทำได้ที่การ์ดเดิม`);
+            } },
+          ],
+        });
       };
     }
     state.cleanLog.filter((x) => x.t === "dedup").forEach((x) => {
       c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="scissors"></i> ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
     });
+    if (state._preClean) {
+      c2.insertAdjacentHTML("beforeend", `<button class="btn small" id="btnUndoDedup"><i data-lucide="undo-2"></i> เลิกทำการตัดทั้งหมด (คืน ${state._preClean.length} แถว)</button>`);
+      $("#btnUndoDedup", c2).onclick = () => {
+        state.rows = state._preClean;
+        state._preClean = null;
+        state.cleanLog = state.cleanLog.filter((x) => x.t !== "dedup");
+        bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
+        toast("คืนแถวที่ตัดทั้งหมดแล้ว");
+      };
+    }
   }
 
-  // หมวดสะกดคล้าย
+  // หมวดสะกดคล้าย — dialog ก่อนรวม + เลิกรวมได้
   if (h.fuzzy.length || state.cleanLog.some((x) => x.t === "merge")) {
     const c3 = cardEl(panel, "ตัวเลือกที่อาจหมายถึงสิ่งเดียวกัน", "ระบบตรวจพบค่าที่สะกดใกล้กันมาก — เลือกรวมหรือยืนยันว่าเป็นคนละค่า ระบบจะไม่รวมให้เองเด็ดขาด", "git-merge");
     if (h.fuzzy.length) {
@@ -2154,7 +2342,7 @@ function renderHealth(panel) {
           <td class="item">${esc(f.b)} <span class="sugg-count">(${f.nb})</span></td>
           <td class="num">${f.conf}%</td>
           <td style="white-space:nowrap">
-            <button class="btn small" data-fz-merge="${fi}"><i data-lucide="git-merge"></i> รวมเป็น "${esc((f.na >= f.nb ? f.a : f.b).slice(0, 14))}"</button>
+            <button class="btn small" data-fz-merge="${fi}"><i data-lucide="git-merge"></i> รวม…</button>
             <button class="btn small" data-fz-keep="${fi}">คนละค่า</button>
           </td>
         </tr>`).join("")}
@@ -2163,12 +2351,26 @@ function renderHealth(panel) {
         const f = h.fuzzy[+b.dataset.fzMerge];
         const to = f.na >= f.nb ? f.a : f.b;
         const from = f.na >= f.nb ? f.b : f.a;
-        if (!confirm(`รวม "${from}" (${Math.min(f.na, f.nb)} รายการ) เข้ากับ "${to}"?\nบันทึกลงรายงานส่วนการจัดการข้อมูล`)) return;
-        state.valueMap[f.colIdx] = state.valueMap[f.colIdx] || {};
-        state.valueMap[f.colIdx][from] = to;
-        state.cleanLog.push({ t: "merge", col: f.colHeader, from, to, at: Date.now() });
-        bumpDataVersion(); saveSessionSnapshot(); renderFilterBar(); renderActiveTab();
-        toast(`รวม "${from.slice(0, 20)}" → "${to.slice(0, 20)}" แล้ว`);
+        showDialog({
+          icon: "git-merge", title: "รวมตัวเลือกที่สะกดต่างกัน",
+          body: `
+            <table class="impact-tbl">
+              <tr><th></th><th>ก่อนรวม</th><th></th><th>หลังรวม</th></tr>
+              <tr><td>"${esc(to)}"</td><td><b>${Math.max(f.na, f.nb)}</b> รายการ</td><td>→</td><td rowspan="2" style="vertical-align:middle"><b>${f.na + f.nb}</b> รายการ<br>ในชื่อ "${esc(to)}"</td></tr>
+              <tr><td>"${esc(from)}"</td><td><b>${Math.min(f.na, f.nb)}</b> รายการ</td><td>→</td></tr>
+            </table>
+            <p class="card-sub" style="margin-top:10px">ใช้ชื่อที่มีผู้ตอบมากกว่าเป็นชื่อหลัก · มีผลกับตัวกรอง ตาราง และรายงานทันที · เลิกรวมได้ที่ประวัติการรวมด้านล่าง · ไฟล์ต้นฉบับไม่ถูกแก้ไข</p>`,
+          buttons: [
+            { label: "ไว้ภายหลัง", onClick: null },
+            { label: `<i data-lucide="git-merge"></i> รวมเป็น "${esc(to.slice(0, 18))}"`, cls: "primary", onClick: () => {
+              state.valueMap[f.colIdx] = state.valueMap[f.colIdx] || {};
+              state.valueMap[f.colIdx][from] = to;
+              state.cleanLog.push({ t: "merge", col: f.colHeader, colIdx: f.colIdx, from, to, at: Date.now() });
+              bumpDataVersion(); saveSessionSnapshot(); renderFilterBar(); renderActiveTab();
+              toast(`รวม "${from.slice(0, 20)}" → "${to.slice(0, 20)}" แล้ว`);
+            } },
+          ],
+        });
       }));
       $$("[data-fz-keep]", c3).forEach((b) => (b.onclick = () => {
         const f = h.fuzzy[+b.dataset.fzKeep];
@@ -2177,9 +2379,22 @@ function renderHealth(panel) {
         toast("บันทึกแล้วว่าเป็นคนละค่า");
       }));
     }
-    state.cleanLog.filter((x) => x.t === "merge").forEach((x) => {
-      c3.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="git-merge"></i> รวม "${esc(x.from)}" → "${esc(x.to)}" ในคอลัมน์ ${esc(String(x.col).slice(0, 30))}</p>`);
+    state.cleanLog.filter((x) => x.t === "merge").forEach((x, mi) => {
+      const row = document.createElement("div");
+      row.className = "issue-row hl-issue hl-info";
+      row.innerHTML = `<i data-lucide="git-merge"></i><span class="ir-msg">รวม "${esc(x.from)}" → "${esc(x.to)}" ในคอลัมน์ ${esc(String(x.col).slice(0, 30))}</span>
+        ${x.colIdx != null ? `<span class="ir-btns"><button class="btn small" data-unmerge="${mi}">เลิกรวม</button></span>` : ""}`;
+      c3.appendChild(row);
     });
+    $$("[data-unmerge]", c3).forEach((b) => (b.onclick = () => {
+      const merges = state.cleanLog.filter((x) => x.t === "merge");
+      const x = merges[+b.dataset.unmerge];
+      if (!x || x.colIdx == null) return;
+      if (state.valueMap[x.colIdx]) delete state.valueMap[x.colIdx][x.from];
+      state.cleanLog = state.cleanLog.filter((e) => e !== x);
+      bumpDataVersion(); saveSessionSnapshot(); renderFilterBar(); renderActiveTab();
+      toast(`เลิกรวม "${x.from.slice(0, 20)}" แล้ว`);
+    }));
   }
 
   // Missing รายคอลัมน์
@@ -2324,7 +2539,8 @@ function renderGuide(panel) {
     `)}
 
     ${sec("gauge", "คะแนนความพร้อมรายงาน และสถานะฉบับร่าง", `
-      <p>ระบบตรวจความพร้อมก่อนใช้เอกสารเป็นคะแนนเต็ม 100 หักตามปัญหาที่พบ: <b>ปัญหาสำคัญ (สีแดง) −25</b> เช่น คะแนนนอกช่วง หัวคอลัมน์ซ้ำ ยังไม่ยืนยันการจำแนกคำถามที่ระบบไม่มั่นใจ · <b>ข้อควรระวัง (สีส้ม) −6</b> เช่น แถวซ้ำที่ยังไม่จัดการ ตัวเลือกสะกดคล้าย ยังไม่กรอกวัตถุประสงค์ กลุ่ม n น้อย · <b>ข้อสังเกต −1</b></p>
+      <p>ระบบตรวจความพร้อมก่อนใช้เอกสารเป็นคะแนนเต็ม 100: <b>ปัญหาสำคัญ (สีแดง) หัก 25</b> เช่น คะแนนนอกช่วง ยังไม่ยืนยันการจำแนกคำถาม · <b>ข้อควรระวัง (สีส้ม) หัก 6</b> เช่น แถวซ้ำ ตัวเลือกสะกดคล้าย ยังไม่กรอกวัตถุประสงค์ · <b>ข้อสังเกตไม่หักคะแนน</b></p>
+      <p>ทุกรายการในแท็บตรวจข้อมูลมีปุ่มพาไปจุดที่ต้องแก้ หรือปุ่ม<b>รับทราบ</b>สำหรับสิ่งที่เป็นธรรมชาติของข้อมูล (เช่น กลุ่มที่มีผู้ตอบน้อยจริง โครงการที่ไม่ระบุวัตถุประสงค์) — เมื่อแก้หรือรับทราบครบทุกข้อ คะแนนจะเต็ม 100 และเอกสารพ้นสถานะฉบับร่าง การตัดแถวซ้ำ/รวมตัวเลือกทุกครั้งจะแสดงผลกระทบก่อน–หลังให้ดูก่อนตัดสินใจ กด "เลิกทำ/เลิกรวม" คืนได้ และไฟล์ต้นฉบับไม่ถูกแก้ไขเสมอ</p>
       <p>ถ้ายังมีปัญหาสำคัญค้าง ตัวอย่างเอกสารจะติดแถบ "ฉบับร่าง" และการดาวน์โหลด .docx จะถามยืนยันพร้อมฝังบรรทัดกำกับในเอกสาร — แก้ครบเมื่อไหร่ ดาวน์โหลดได้เอกสารสะอาดทันที รายการที่ต้องแก้ดูได้ที่แท็บ "ตรวจข้อมูล" หรือปุ่มตั้งค่ารายงาน</p>
     `)}
 
@@ -3269,9 +3485,16 @@ function renderReport(panel, rows) {
   $("#btnDoc").onclick = () => {
     const rd2 = computeReadiness();
     if (rd2.crit.length) {
-      const okGo = confirm(`พบปัญหาสำคัญ ${rd2.crit.length} รายการ:\n• ${rd2.crit.join("\n• ")}\n\nกด "ตกลง" เพื่อดาวน์โหลดเป็นฉบับร่าง (มีข้อความกำกับในเอกสาร)\nกด "ยกเลิก" เพื่อกลับไปแก้ก่อน`);
-      if (!okGo) return;
-      downloadDocx(`<p style="${W_P}text-align:center;color:#b00020;font-weight:bold;">— รายงานฉบับร่าง: ยังไม่ผ่านการตรวจสอบข้อมูลและการจำแนกคำถามครบถ้วน —</p>` + allHtml());
+      showDialog({
+        icon: "file-warning", title: `ยังมีปัญหาสำคัญ ${rd2.crit.length} รายการ`,
+        body: rd2.crit.map((t) => `<p class="hl-issue hl-crit">${issueIcon("crit")} ${t}</p>`).join("") +
+          `<p class="card-sub" style="margin-top:10px">ดาวน์โหลดตอนนี้จะได้ "ฉบับร่าง" ที่มีข้อความกำกับในเอกสาร — หรือไปแก้/รับทราบก่อนเพื่อให้ได้ฉบับสะอาด</p>`,
+        buttons: [
+          { label: `<i data-lucide="download"></i> ดาวน์โหลดฉบับร่าง`, onClick: () =>
+            downloadDocx(`<p style="${W_P}text-align:center;color:#b00020;font-weight:bold;">— รายงานฉบับร่าง: ยังไม่ผ่านการตรวจสอบข้อมูลและการจำแนกคำถามครบถ้วน —</p>` + allHtml()) },
+          { label: `<i data-lucide="activity"></i> ไปแก้ก่อน`, cls: "primary", onClick: () => switchTab("health") },
+        ],
+      });
       return;
     }
     downloadDocx(allHtml());
@@ -3406,6 +3629,8 @@ async function openSession(id) {
   state.cleanLog = s.cleanLog || [];
   state.mapConfirmed = !!s.mapConfirmed;
   state.fuzzyDismissed = s.fuzzyDismissed || [];
+  state.ackIssues = s.ackIssues || [];
+  state._preClean = null;
   state.reportExtraIds = new Set();
   bumpDataVersion();
 
