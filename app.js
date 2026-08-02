@@ -107,6 +107,7 @@ const state = {
   fuzzyDismissed: [],        // คู่ค่าที่ผู้ใช้ยืนยันว่า "คนละค่า" — ไม่ต้องเตือนซ้ำ
   ackIssues: [],             // รายการตรวจข้อมูลที่ผู้ใช้กด "รับทราบ" — ไม่หักคะแนนความพร้อม
   _preClean: null,           // สำเนาแถวก่อนตัดแถวซ้ำ — ปุ่ม "เลิกทำ"
+  dedupKeep: "first",        // คนเดิมส่งซ้ำ: เก็บรายการแรก | last = เก็บรายการล่าสุด (ฉบับแก้ไข)
 };
 
 /* ============================================================
@@ -1982,6 +1983,23 @@ const ROLE_OPTIONS = [
 ];
 const ORGANIZER_ROLES = new Set(["organizer", "staff", "teacher", "executive"]);
 
+/* ---------- ตัวชี้ตัวตนผู้ตอบ (ใช้ชี้ขาดว่าสองแถวเป็นคนเดียวกันไหม) ---------- */
+const IDENT_HEADER = /(รหัส\s*(นัก(ศึกษา|เรียน)|ประจำตัว|ผู้ตอบ)?|เลขประจำตัว|student\s*id|อีเมล|e-?mail|ชื่อ\s*-\s*(สกุล|นามสกุล)|ชื่อ-นามสกุล|ชื่อผู้ตอบ)/i;
+
+/** คอลัมน์ที่ระบุตัวผู้ตอบ — รวมคอลัมน์ที่ไม่ได้ใช้วิเคราะห์ด้วย (รหัส/อีเมล/ชื่อ มักถูกตั้งเป็น "ไม่วิเคราะห์") */
+function identifierCols(columns = state.columns, rows = state.rows) {
+  return columns.filter((c) => IDENT_HEADER.test(String(c.header)) &&
+    rows.some((r) => String(r[c.i] ?? "").trim() !== ""));
+}
+/** ตัวตนของแถว — ใช้ค่าแรกที่ไม่ว่าง (ฟอร์มแยกกิ่งจะกรอกช่องรหัสช่องเดียว) */
+function rowIdentity(r, idCols) {
+  for (const c of idCols) {
+    const v = String(r[c.i] ?? "").trim().toLowerCase();
+    if (v) return v;
+  }
+  return "";
+}
+
 /* ---------- Data Health Check ---------- */
 let _healthKey = null, _health = null;
 
@@ -1990,7 +2008,7 @@ function computeHealth() {
   const rows = state.rows, headers = state.headers, columns = state.columns;
   const h = {
     respondents: rows.length,
-    dupRowIdx: [], dupHeaders: [], emptyHeaders: [],
+    dupRowIdx: [], dupPairs: [], sameAnsDiffId: [], idCols: [], dupHeaders: [], emptyHeaders: [],
     missing: [], outOfRange: [], unparsed: [], fuzzy: [],
     issues: [],
   };
@@ -2004,15 +2022,57 @@ function computeHealth() {
     else seen.set(t, i);
   });
 
-  // แถวซ้ำทั้งแถว (เทียบเฉพาะคอลัมน์ที่ใช้วิเคราะห์ — ข้าม timestamp/ignore)
+  /* แถวซ้ำ = "คนเดิมส่งซ้ำ" เท่านั้น — ชี้ขาดด้วยรหัส/อีเมล/ชื่อผู้ตอบ
+     คนละรหัสถือเป็นคนละคนเสมอ แม้จะตอบเหมือนกันทุกข้อ (ให้คะแนนเต็มทุกข้อเป็นเรื่องปกติ)
+     ไฟล์ที่ไม่มีตัวชี้ตัวตนเลย จึงเทียบคำตอบได้ แต่ระบบจะระบุชัดว่ายืนยันตัวตนไม่ได้ */
+  const idCols = identifierCols(columns, rows);
+  h.idCols = idCols.map((c) => c.header);
   const useIdx = columns.filter((c) => c.type !== "ignore").map((c) => c.i);
-  const rowKey = new Map();
-  rows.forEach((r, ri) => {
-    const k = useIdx.map((i) => String(r[i] ?? "").trim()).join("\u0001");
-    if (!k.replace(/\u0001/g, "")) return; // แถวว่างไม่ใช่แถวซ้ำ
-    if (rowKey.has(k)) h.dupRowIdx.push(ri);
-    else rowKey.set(k, ri);
-  });
+  const answerKey = (r) => useIdx.map((i) => String(r[i] ?? "").trim()).join("\u0001");
+
+  if (idCols.length) {
+    const byId = new Map();
+    const noIdRows = [];
+    rows.forEach((r, ri) => {
+      const id = rowIdentity(r, idCols);
+      if (!id) { noIdRows.push(ri); return; }
+      if (byId.has(id)) {
+        const first = byId.get(id);
+        h.dupRowIdx.push(ri);
+        h.dupPairs.push({ first, dup: ri, id, sameAnswers: answerKey(rows[first]) === answerKey(r), kind: "id" });
+      } else byId.set(id, ri);
+    });
+    // แถวที่ไม่ได้กรอกตัวชี้ตัวตน — เทียบคำตอบกันเองเท่านั้น (ยืนยันตัวตนไม่ได้ ไม่ตัดให้อัตโนมัติ)
+    const noIdKey = new Map();
+    noIdRows.forEach((ri) => {
+      const k = answerKey(rows[ri]);
+      if (!k.replace(/\u0001/g, "")) return;
+      if (noIdKey.has(k)) h.sameAnsDiffId.push({ first: noIdKey.get(k), dup: ri, kind: "noid" });
+      else noIdKey.set(k, ri);
+    });
+    // คำตอบเหมือนกันแต่คนละรหัส — ไม่ใช่แถวซ้ำ เก็บไว้แจ้งเพื่อความโปร่งใสเท่านั้น
+    const ansKey = new Map();
+    rows.forEach((r, ri) => {
+      const id = rowIdentity(r, idCols);
+      if (!id) return;
+      const k = answerKey(r);
+      if (!k.replace(/\u0001/g, "")) return;
+      if (ansKey.has(k)) {
+        const first = ansKey.get(k);
+        if (rowIdentity(rows[first], idCols) !== id) h.sameAnsDiffId.push({ first, dup: ri, kind: "diffid" });
+      } else ansKey.set(k, ri);
+    });
+  } else {
+    const rowKey = new Map();
+    rows.forEach((r, ri) => {
+      const k = answerKey(r);
+      if (!k.replace(/\u0001/g, "")) return; // แถวว่างไม่ใช่แถวซ้ำ
+      if (rowKey.has(k)) {
+        h.dupRowIdx.push(ri);
+        h.dupPairs.push({ first: rowKey.get(k), dup: ri, id: "", sameAnswers: true, kind: "answers" });
+      } else rowKey.set(k, ri);
+    });
+  }
 
   // Missing / คะแนนนอกช่วง / ค่าที่แปลงไม่ได้
   columns.forEach((c) => {
@@ -2070,7 +2130,9 @@ function computeHealth() {
   const missTotal = h.missing.reduce((a, x) => a + x.n, 0);
   if (h.outOfRange.length) h.issues.push({ lv: "crit", msg: `พบคะแนนนอกช่วง 1–5 ใน ${h.outOfRange.length} คอลัมน์ (เช่น ${esc(h.outOfRange[0].header.slice(0, 40))}: ${h.outOfRange[0].examples.join(", ")}) — ตรวจไฟล์ต้นทางหรือเปลี่ยนชนิดคอลัมน์` });
   if (h.dupHeaders.length) h.issues.push({ lv: "crit", msg: `หัวคอลัมน์ซ้ำกัน: ${h.dupHeaders.slice(0, 3).map((x) => `"${esc(x.slice(0, 30))}"`).join(", ")} — ผลอาจถูกนับรวมผิดคอลัมน์` });
-  if (h.dupRowIdx.length) h.issues.push({ lv: "warn", msg: `พบแถวที่ข้อมูลซ้ำกันทั้งแถว ${h.dupRowIdx.length} แถว — อาจเป็นการกรอกซ้ำ (กดตัดได้ด้านล่าง)` });
+  if (h.dupRowIdx.length) h.issues.push({ lv: "warn", msg: h.idCols.length
+    ? `พบการส่งซ้ำจาก${esc(h.idCols[0])}เดียวกัน ${h.dupRowIdx.length} แถว (กดตัดได้ด้านล่าง)`
+    : `พบแถวที่ตอบเหมือนกันทุกข้อ ${h.dupRowIdx.length} แถว — ไฟล์นี้ไม่มีรหัสผู้ตอบจึงยืนยันตัวตนไม่ได้ (กดตัดได้ด้านล่าง)` });
   if (h.fuzzy.length) h.issues.push({ lv: "warn", msg: `พบตัวเลือกที่สะกดคล้ายกัน ${h.fuzzy.length} คู่ — ตรวจและยืนยันการรวมด้านล่าง (ระบบไม่รวมให้อัตโนมัติ)` });
   // ค่าว่างของคำถามปลายเปิดเป็นเรื่องปกติ — ไม่นับเป็นประเด็น; ว่างเกิน 85% มักเป็นคำถามเฉพาะกลุ่ม/กิ่งฟอร์ม → แจ้งเป็นข้อมูล
   h.missing.filter((m) => m.pct > 20 && columns[m.i]?.type !== "text").forEach((m) => {
@@ -2137,9 +2199,10 @@ function computeReadiness() {
   if (lc.length && !state.mapConfirmed) add("mapconfirm", "crit",
     `มี ${lc.length} คอลัมน์ที่ระบบไม่มั่นใจการจำแนกชนิด และยังไม่ได้รับการยืนยัน`,
     { tab: "columns", fixLabel: "ไปตรวจและกดยืนยัน", ackable: false });
-  if (h.dupRowIdx.length) add("duprows", "warn",
-    `พบแถวที่ข้อมูลซ้ำกันทั้งแถว ${h.dupRowIdx.length} แถว — อาจเป็นการกดส่งซ้ำ (ตัดได้ที่การ์ดด้านล่าง)`,
-    { ackNote: "เก็บทุกแถวไว้ — เชื่อว่าเป็นคนละคนที่ตอบเหมือนกันจริง" });
+  if (h.dupRowIdx.length) add("duprows", "warn", h.idCols.length
+    ? `พบ ${h.dupRowIdx.length} แถวที่มี${esc(h.idCols[0])}ซ้ำกับแถวก่อนหน้า — น่าจะเป็นคนเดิมกดส่งซ้ำ (ดูรายคู่ที่การ์ดด้านล่าง)`
+    : `พบ ${h.dupRowIdx.length} แถวที่ตอบเหมือนกันทุกข้อ — ไฟล์นี้ไม่มีรหัสผู้ตอบจึงยืนยันไม่ได้ว่าเป็นคนเดียวกัน (ดูที่การ์ดด้านล่าง)`,
+    { ackNote: "เก็บทุกแถวไว้ — ตรวจแล้วว่าเป็นคำตอบของคนละคน" });
   if (h.fuzzy.length) add("fuzzy", "warn",
     `พบตัวเลือกที่สะกดคล้ายกัน ${h.fuzzy.length} คู่ — เลือก "รวม" หรือ "คนละค่า" รายคู่ที่การ์ดด้านล่าง`,
     { ackable: false });
@@ -2278,19 +2341,45 @@ function renderHealth(panel) {
   }
 
   // แถวซ้ำ — dialog แสดงผลกระทบก่อนตัด + เลิกทำได้
-  if (h.dupRowIdx.length || state.cleanLog.some((x) => x.t === "dedup")) {
-    const c2 = cardEl(panel, "แถวที่ซ้ำกันทั้งแถว", "คำตอบที่เหมือนกันทุกช่องอาจเป็นการกดส่งซ้ำ — กดดูผลกระทบก่อนตัดสินใจ ตัดแล้วเลิกทำได้ และไฟล์ต้นฉบับไม่ถูกแก้ไข", "copy-x");
+  if (h.dupRowIdx.length || h.sameAnsDiffId.length || state.cleanLog.some((x) => x.t === "dedup")) {
+    const c2 = cardEl(panel, "การส่งซ้ำของผู้ตอบ",
+      h.idCols.length
+        ? `ระบบชี้ขาดด้วย "${h.idCols.join(" / ")}" — คนละรหัสถือเป็นคนละคนเสมอ แม้ตอบเหมือนกันทุกข้อ`
+        : "ไฟล์นี้ไม่มีคอลัมน์รหัส/อีเมล/ชื่อผู้ตอบ ระบบจึงเทียบได้เพียงคำตอบ — ยืนยันตัวตนไม่ได้ โปรดตรวจก่อนตัด",
+      "copy-x");
     if (h.dupRowIdx.length) {
-      c2.insertAdjacentHTML("beforeend", `<button class="btn small primary" id="btnDedup"><i data-lucide="eraser"></i> ดูผลกระทบและตัดแถวซ้ำ ${h.dupRowIdx.length} แถว</button>`);
+      // ตารางรายคู่ ให้ตรวจได้ว่าเป็นใคร แถวไหนในไฟล์
+      c2.insertAdjacentHTML("beforeend", `<div class="tbl-wrap"><table class="app">
+        <tr><th class="item">${h.idCols.length ? esc(h.idCols[0]) : "คู่ที่พบ"}</th><th>แถวในไฟล์ (เก็บไว้)</th><th>แถวในไฟล์ (จะถูกตัด)</th><th class="item">คำตอบ</th></tr>
+        ${h.dupPairs.slice(0, 20).map((p) => `<tr>
+          <td class="item">${p.id ? esc(p.id) : "— ไม่มีรหัส —"}</td>
+          <td class="num">${p.first + 2}</td><td class="num">${p.dup + 2}</td>
+          <td class="item">${p.sameAnswers ? "เหมือนกันทุกข้อ" : "ต่างกันบางข้อ (ตอบใหม่?)"}</td>
+        </tr>`).join("")}
+      </table></div>
+      ${h.dupPairs.length > 20 ? `<p class="card-sub">แสดง 20 คู่แรกจาก ${h.dupPairs.length} คู่</p>` : ""}`);
+      const anyEdited = h.dupPairs.some((p) => !p.sameAnswers);
+      c2.insertAdjacentHTML("beforeend", `
+        ${anyEdited ? `<label class="rp-field" style="max-width:340px;margin:10px 0 4px">
+          <span>บางคู่ตอบไม่เหมือนเดิม (คนเดิมตอบใหม่) — ให้เก็บรายการใด</span>
+          <select id="selDedupKeep" class="coltype">
+            <option value="first" ${state.dedupKeep === "first" ? "selected" : ""}>เก็บรายการแรกที่ส่ง (ค่าเริ่มต้น)</option>
+            <option value="last" ${state.dedupKeep === "last" ? "selected" : ""}>เก็บรายการล่าสุด (ถือเป็นฉบับแก้ไข)</option>
+          </select></label>` : ""}
+        <button class="btn small primary" id="btnDedup"><i data-lucide="eraser"></i> ดูผลกระทบและตัดแถวซ้ำ ${h.dupRowIdx.length} แถว</button>`);
+      const selKeep = $("#selDedupKeep", c2);
+      if (selKeep) selKeep.onchange = () => { state.dedupKeep = selKeep.value; };
       $("#btnDedup", c2).onclick = () => {
         // คำนวณผลกระทบจริงล่วงหน้า: จำนวนผู้ตอบ + ค่าเฉลี่ยรวม ก่อน/หลัง
-        const del = new Set(h.dupRowIdx);
+        const keepLast = state.dedupKeep === "last";
+        const del = new Set(h.dupPairs.map((p) => (keepLast ? p.first : p.dup)));
         const afterRows = state.rows.filter((_, i) => !del.has(i));
         const before = analyzeDataset(state.rows, state.columns).overall;
         const after = analyzeDataset(afterRows, state.columns).overall;
-        const showIdx = state.columns.filter((c) => c.type !== "ignore").map((c) => c.i).slice(0, 3);
-        const sample = h.dupRowIdx.slice(0, 3).map((ri) =>
-          `<p class="dlg-sample">แถวที่ ${ri + 1}: ${showIdx.map((i) => esc(String(state.rows[ri][i]).slice(0, 24))).filter(Boolean).join(" · ")}</p>`).join("");
+        const sample = h.dupPairs.slice(0, 3).map((p) => {
+          const cut = keepLast ? p.first : p.dup, keep = keepLast ? p.dup : p.first;
+          return `<p class="dlg-sample">${p.id ? `<b>${esc(p.id)}</b> — ` : ""}ตัดแถวที่ ${cut + 2} (เก็บแถวที่ ${keep + 2} ไว้)</p>`;
+        }).join("");
         showDialog({
           icon: "eraser", title: `ตัดแถวซ้ำ ${del.size} แถว — ผลกระทบต่อข้อมูล`,
           body: `
@@ -2299,21 +2388,32 @@ function renderHealth(panel) {
               <tr><td>ผู้ตอบ</td><td><b>${state.rows.length}</b> คน</td><td>→</td><td><b>${afterRows.length}</b> คน</td></tr>
               <tr><td>ค่าเฉลี่ยรวม</td><td><b>${f2(before.mean)}</b></td><td>→</td><td><b>${f2(after.mean)}</b> (${Math.abs(after.mean - before.mean) < 0.005 ? "แทบไม่เปลี่ยน" : after.mean > before.mean ? "เพิ่มขึ้น" : "ลดลง"} ${Math.abs(after.mean - before.mean).toFixed(3)})</td></tr>
             </table>
-            <p style="margin:10px 0 4px"><b>ตัวอย่างแถวที่จะถูกตัด</b> (เหลือรายการแรกของแต่ละชุดไว้เสมอ):</p>
+            <p style="margin:10px 0 4px"><b>แถวที่จะถูกตัด</b> (เก็บ${keepLast ? "รายการล่าสุด" : "รายการแรก"}ของแต่ละคนไว้):</p>
             ${sample}${del.size > 3 ? `<p class="card-sub">และอีก ${del.size - 3} แถว</p>` : ""}
-            <p class="card-sub" style="margin-top:10px">ตัดเฉพาะในการวิเคราะห์นี้ — ไฟล์ต้นฉบับในเครื่อง/Google Drive ไม่ถูกแก้ไข และกด "เลิกทำ" คืนได้ทุกเมื่อ</p>`,
+            <p class="card-sub" style="margin-top:10px">${h.idCols.length
+              ? `ทุกแถวที่ตัดมี${esc(h.idCols[0])}ตรงกับแถวที่เก็บไว้ — จำนวน<b>ผู้เข้าร่วมที่นับได้จะไม่ลดลง</b> เพราะเป็นคนเดิม`
+              : `<b>ไฟล์นี้ไม่มีรหัสผู้ตอบ</b> ระบบเทียบได้เพียงคำตอบ จึงอาจเป็นคนละคนที่ตอบเหมือนกัน — ถ้าไม่แน่ใจ แนะนำให้เก็บไว้ทั้งหมด`}</p>
+            <p class="card-sub">ตัดเฉพาะในการวิเคราะห์นี้ — ไฟล์ต้นฉบับในเครื่อง/Google Drive ไม่ถูกแก้ไข และกด "เลิกทำ" คืนได้ทุกเมื่อ</p>`,
           buttons: [
             { label: "ไว้ภายหลัง", onClick: null },
             { label: `<i data-lucide="eraser"></i> ตัดแถวซ้ำ ${del.size} แถว`, cls: "primary", onClick: () => {
               if (!state._preClean) state._preClean = state.rows.slice();
               state.rows = afterRows;
-              state.cleanLog.push({ t: "dedup", n: del.size, at: Date.now() });
+              state.cleanLog.push({ t: "dedup", n: del.size, keep: state.dedupKeep, byId: !!h.idCols.length, at: Date.now() });
               bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
               toast(`ตัดแถวซ้ำ ${del.size} แถวแล้ว — เลิกทำได้ที่การ์ดเดิม`);
             } },
           ],
         });
       };
+    }
+    if (h.sameAnsDiffId.length) {
+      const diffId = h.sameAnsDiffId.filter((x) => x.kind === "diffid").length;
+      const noId = h.sameAnsDiffId.length - diffId;
+      c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info">${issueIcon("info")} ${[
+        diffId ? `มี ${diffId} คู่ที่ตอบเหมือนกันทุกข้อแต่เป็น<b>คนละรหัส</b> — ระบบถือว่าเป็นคนละคน ไม่นับเป็นการส่งซ้ำและไม่ตัดออก` : "",
+        noId ? `มี ${noId} คู่ที่ตอบเหมือนกันแต่<b>ไม่ได้กรอกรหัส</b>ทั้งคู่ — ยืนยันไม่ได้ ระบบจึงเก็บไว้ทั้งหมด` : "",
+      ].filter(Boolean).join(" · ")}</p>`);
     }
     state.cleanLog.filter((x) => x.t === "dedup").forEach((x) => {
       c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="scissors"></i> ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
@@ -2536,6 +2636,14 @@ function renderGuide(panel) {
       <p><b>ส่วนที่ 1 วิธีการประเมิน</b> เครื่องมือ/กลุ่มผู้ตอบ/สถิติ/การจัดการข้อมูล/ข้อจำกัด · <b>ส่วนที่ 2 บทสรุปผู้บริหาร</b> อ่านหน้าเดียวรู้เรื่อง: ช่วงคะแนน จุดแข็ง ประเด็นพัฒนา และข้อสรุป · <b>ส่วนถัดไป</b> ผลรายฐานผู้ประเมิน (ผู้เข้าร่วม → ผู้จัด) / การบรรลุวัตถุประสงค์ / SDGs / คำถามเชิงหมวดหมู่ / วิเคราะห์ความคิดเห็น / ข้อเสนอแนะเพื่อการพัฒนา · <b>ภาคผนวก</b> ตารางรายข้อทุกด้าน ข้อมูลผู้ตอบละเอียด ความคิดเห็นฉบับเต็ม</p>
       <p>กราฟในเนื้อหาหลักมีไม่เกิน 2 ภาพ (ค่าเฉลี่ยรายด้านของฐานหลักพร้อมเส้นเกณฑ์ และจำนวนความคิดเห็นตามประเด็น) ตารางรายข้อจำนวนมากถูกย้ายไปภาคผนวกเพื่อให้เนื้อหาหลักอ่านต่อเนื่อง</p>
       <p><b>จอ vs ไฟล์:</b> ตัวอย่างบนจอใช้ฟอนต์อ่านสบาย แต่เมื่อคัดลอกหรือดาวน์โหลด .docx จะได้ TH Sarabun 16pt เลขอารบิก ตามแบบเอกสารราชการโดยอัตโนมัติ (สลับเลขไทยได้)</p>
+    `)}
+
+    ${sec("copy-x", "ระบบตรวจ \"การส่งซ้ำ\" อย่างไร", `
+      <p>ระบบชี้ขาดด้วย<b>ตัวชี้ตัวผู้ตอบ</b>ก่อนเสมอ ได้แก่คอลัมน์รหัสนักศึกษา เลขประจำตัว อีเมล หรือชื่อ–สกุล (รวมคอลัมน์ที่ตั้งเป็น "ไม่วิเคราะห์" ด้วย และรองรับฟอร์มที่แยกช่องรหัสหลายกิ่ง)</p>
+      <div class="g-step"><span class="g-num">1</span><div><b>รหัสตรงกัน</b> = คนเดิมกดส่งซ้ำ → ระบบเสนอให้ตัด เก็บรายการแรกไว้ จำนวนผู้เข้าร่วมที่นับได้ไม่ลดลงเพราะเป็นคนเดิม</div></div>
+      <div class="g-step"><span class="g-num">2</span><div><b>รหัสต่างกัน</b> = คนละคนเสมอ แม้ตอบเหมือนกันทุกข้อ (การให้คะแนนเต็มทุกข้อเป็นเรื่องปกติมาก) → <b>ไม่นับเป็นการส่งซ้ำและไม่ตัดออก</b> ระบบเพียงแจ้งให้ทราบ</div></div>
+      <div class="g-step"><span class="g-num">3</span><div><b>ไฟล์ไม่มีรหัสผู้ตอบเลย</b> (เช่น แบบกระดาษที่พิมพ์เอง) → เทียบได้เพียงคำตอบ ระบบจะระบุชัดว่ายืนยันตัวตนไม่ได้ และแนะนำให้เก็บไว้ทั้งหมดหากไม่แน่ใจ</div></div>
+      <p>ก่อนตัดจะมีตารางรายคู่ให้ตรวจว่าเป็นรหัสใด อยู่แถวไหนของไฟล์ พร้อมผลกระทบก่อน–หลัง และกด "เลิกทำ" คืนได้เสมอ — ไฟล์ต้นฉบับไม่ถูกแก้ไขไม่ว่ากรณีใด</p>
     `)}
 
     ${sec("gauge", "คะแนนความพร้อมรายงาน และสถานะฉบับร่าง", `
@@ -2902,7 +3010,9 @@ function methodologyBlock(ds, num, pm, multi, datasets) {
   const hh = computeHealth();
   if (hh.missTotal) mgmt.push(`ข้อมูลมีช่องที่ไม่ได้ตอบ (missing) รวม ${hh.missTotal} ช่อง`);
   state.cleanLog.forEach((x) => {
-    if (x.t === "dedup") mgmt.push(`ตรวจพบและตัดแถวข้อมูลที่ซ้ำกันทั้งแถวออก ${x.n} แถว`);
+    if (x.t === "dedup") mgmt.push(x.byId
+      ? `ตรวจพบการส่งแบบประเมินซ้ำจากผู้ตอบรายเดิม (รหัสผู้ตอบตรงกัน) และคัดออก ${x.n} รายการ โดยคง${x.keep === "last" ? "รายการล่าสุด" : "รายการแรก"}ของผู้ตอบแต่ละรายไว้`
+      : `ตรวจพบและตัดแถวข้อมูลที่มีคำตอบเหมือนกันทุกข้อออก ${x.n} แถว`);
     if (x.t === "merge") mgmt.push(`รวมตัวเลือกที่สะกดต่างกัน "${x.from}" เข้ากับ "${x.to}" หลังการตรวจยืนยัน`);
   });
   mgmt.push(state.mapConfirmed ? `การจำแนกชนิดคำถามผ่านการตรวจสอบและยืนยันโดยผู้จัดทำ` : `การจำแนกชนิดคำถามใช้การตรวจอัตโนมัติของระบบ [โปรดตรวจสอบและยืนยันที่แท็บตั้งค่าคอลัมน์]`);
