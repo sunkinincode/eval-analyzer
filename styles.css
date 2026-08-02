@@ -856,3 +856,48 @@ svg.lucide { width: 15px; height: 15px; stroke-width: 2; vertical-align: -2.5px;
 @media print {
   .rp-topbar, .rp-drawer { display: none !important; }
 }
+
+/* ============================================================
+   Guided Analysis: ตรวจข้อมูล + ความมั่นใจ + ความพร้อมรายงาน
+   ============================================================ */
+.hlth-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.hlth-tile {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+}
+.hlth-tile b { font-size: 19px; letter-spacing: -0.01em; }
+.hlth-tile span { font-size: 11px; color: var(--muted); font-weight: 600; }
+.hlth-pass { border-color: color-mix(in srgb, #2e9e5b 45%, transparent); }
+.hlth-pass b { color: #2e9e5b; }
+.hlth-warn { border-color: color-mix(in srgb, #e08b1e 50%, transparent); }
+.hlth-warn b { color: #e08b1e; }
+.hlth-crit { border-color: color-mix(in srgb, #d64545 55%, transparent); }
+.hlth-crit b { color: #d64545; }
+.hl-issue { margin: 6px 0 0; font-size: 13px; line-height: 1.55; padding: 8px 12px; border-radius: 10px; }
+.hl-crit { background: color-mix(in srgb, #d64545 12%, transparent); color: var(--text-primary); }
+.hl-warn { background: color-mix(in srgb, #e08b1e 12%, transparent); }
+.hl-info { background: var(--surface-2); color: var(--text-secondary); }
+.hl-pass { background: color-mix(in srgb, #2e9e5b 10%, transparent); }
+.conf-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px;
+  vertical-align: middle; margin-left: 4px;
+}
+.conf-chip.ok { background: color-mix(in srgb, #2e9e5b 15%, transparent); color: #2e9e5b; }
+.conf-chip.mid { background: color-mix(in srgb, #e08b1e 16%, transparent); color: #c07515; }
+.conf-chip.low { background: color-mix(in srgb, #d64545 14%, transparent); color: #d64545; }
+tr.row-lowconf td { background: color-mix(in srgb, #e08b1e 6%, transparent); }
+.mapping-confirm { margin-bottom: var(--gap); }
+.rm-label {
+  width: 100%; min-width: 140px; font: inherit; font-size: 12.5px; padding: 6px 9px;
+  border-radius: 9px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+}
+.rp-ready { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 99px; }
+.rp-ready-pass { background: color-mix(in srgb, #2e9e5b 14%, transparent); color: #2e9e5b; }
+.rp-ready-warn { background: color-mix(in srgb, #e08b1e 15%, transparent); color: #c07515; }
+.rp-ready-crit { background: color-mix(in srgb, #d64545 14%, transparent); color: #d64545; }
+.draft-band {
+  margin: 14px auto 0; max-width: 980px; padding: 10px 16px; border-radius: 12px;
+  background: color-mix(in srgb, #e08b1e 13%, transparent);
+  border: 1px dashed color-mix(in srgb, #e08b1e 55%, transparent);
+  font-size: 13px; font-weight: 600;
+}

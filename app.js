@@ -100,6 +100,11 @@ const state = {
   reviewMeta: null,          // ข้อมูลผู้ส่งงานมาตรวจ
   mergedIds: new Set(),      // id ประวัติที่ผนวกไปแล้ว — กันผนวกซ้ำ
   _preMerge: null,           // สำเนาข้อมูลก่อนผนวกครั้งแรก — ไว้กด "เลิกผนวก"
+  roleMap: {},               // Respondent Mapping: ค่าสถานะ → { role, label ที่ใช้ในรายงาน }
+  valueMap: {},              // การรวมตัวเลือกสะกดต่างที่ผู้ใช้ยืนยันแล้ว: colIdx → { from: to }
+  cleanLog: [],              // บันทึกการทำความสะอาดข้อมูล (ตัดแถวซ้ำ/รวมหมวด) — ลงรายงานส่วนการจัดการข้อมูล
+  mapConfirmed: false,       // ผู้ใช้ยืนยันการจำแนกชนิดคำถามแล้วหรือยัง
+  fuzzyDismissed: [],        // คู่ค่าที่ผู้ใช้ยืนยันว่า "คนละค่า" — ไม่ต้องเตือนซ้ำ
 };
 
 /* ============================================================
@@ -366,6 +371,8 @@ async function saveSessionSnapshot() {
       colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item, mergeInto: c.mergeInto ?? null, noReport: c.noReport ?? false })),
       overallMean: (() => { const m = analyzeDataset(state.rows, state.columns).overall.mean; return Number.isFinite(m) ? m : null; })(),
       reportOpts: { ...state.reportOpts },
+      roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
+      mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
     });
   } catch (e) { console.warn("บันทึกประวัติไม่สำเร็จ", e); }
 }
@@ -484,6 +491,10 @@ function ingestAoA(aoa, opts = {}) {
   state.mergedFrom = [];
   state.mergedIds = new Set();
   state._preMerge = null;
+  if (!opts.colTypes) {
+    state.roleMap = {}; state.valueMap = {}; state.cleanLog = [];
+    state.mapConfirmed = false; state.fuzzyDismissed = [];
+  }
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -683,6 +694,9 @@ function exportProject(withReview) {
     projectName: state.projectName, fileName: state.fileName,
     respTarget: state.respTarget, mergedFrom: state.mergedFrom,
     headers: state.headers, rows: state.rows, colTypes: currentColTypes(),
+    roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
+    mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
+    reportOpts: { ...state.reportOpts },
     review: withReview ? state.review : null,
   };
   const base = (state.projectName.trim() || state.fileName.replace(/\.[^.]+$/, "") || "โครงการ");
@@ -781,34 +795,41 @@ function detectColumns(headers, rows, bands = null) {
   return headers.map((header, i) => {
     const values = rows.map((r) => r[i]).filter((v) => v !== "");
     const col = { i, header, type: "text", group: null, item: null };
-    if (!values.length) { col.type = "ignore"; return col; }
+    if (!values.length) { col.type = "ignore"; col._conf = 0.95; return col; }
 
     const strs = values.map((v) => String(v).trim());
     const distinct = [...new Set(strs)];
     const avgLen = strs.reduce((a, s) => a + s.length, 0) / strs.length;
 
-    if (IGNORE_HEADER.test(header)) { col.type = "ignore"; return col; }
-    if (ID_HEADER.test(header)) { col.type = "ignore"; return col; }
+    if (IGNORE_HEADER.test(header)) { col.type = "ignore"; col._conf = 0.95; return col; }
+    if (ID_HEADER.test(header)) { col.type = "ignore"; col._conf = 0.9; return col; }
     // คอลัมน์เลขลำดับ/เลขที่ของไฟล์กรอกมือ — ไม่ใช่ข้อมูลประเมิน
-    if (/^(ลำดับ|ลําดับ|ที่|เลขที่|no\.?|เลขประจำตัว)\s*$/i.test(header)) { col.type = "ignore"; return col; }
+    if (/^(ลำดับ|ลําดับ|ที่|เลขที่|no\.?|เลขประจำตัว)\s*$/i.test(header)) { col.type = "ignore"; col._conf = 0.95; return col; }
 
     // SDG / สองค่า สอดคล้อง–ไม่สอดคล้อง
-    if (strs.every(isSdgLikeValue)) { col.type = "sdg"; return col; }
+    if (strs.every(isSdgLikeValue)) { col.type = "sdg"; col._conf = 0.95; return col; }
 
-    // คะแนน 1–5
+    // คะแนน 1–5 — ความมั่นใจ = สัดส่วนคำตอบที่แปลงเป็นคะแนนได้จริง
     const ratingOk = values.filter((v) => parseRating(v) != null).length / values.length;
     const bracket = header.match(/^(.*?)\s*\[(.+)\]\s*$/);
     if (ratingOk >= 0.9 && (bracket || !DEMOG_HEADER.test(header))) {
       col.type = "rating";
+      col._conf = Math.min(0.99, ratingOk);
       if (bracket) { col.item = bracket[2].trim(); col.group = bracket[1].trim() || unnamedGroupName(col.item); }
       else { col.group = (bands && bands[i]) || "การประเมินรายข้ออื่น ๆ"; col.item = header; }
       return col;
     }
 
-    // คำถามปลายเปิด (เช็คหลังคะแนน/SDG เพราะชื่อข้อคำถามคะแนนอาจมีคำเหล่านี้ปนอยู่)
-    if (TEXT_HEADER.test(header)) { col.type = "text"; return col; }
-    if (distinct.length <= 20 && avgLen <= 60) { col.type = "categorical"; return col; }
-    col.type = "text";
+    // คำถามเชิงความเห็นที่คำตอบกระจุกเป็นตัวเลือกซ้ำ ๆ (เช่น "ฐานกิจกรรมที่ประทับใจมากที่สุด")
+    // = คำถามหมวดหมู่ → วิเคราะห์ด้วยความถี่/ร้อยละ ไม่ใช่ Theme — ความมั่นใจต่ำ ให้ผู้ใช้ยืนยัน
+    if (TEXT_HEADER.test(header)) {
+      if (distinct.length <= 25 && distinct.length <= strs.length * 0.5 && avgLen <= 50) {
+        col.type = "categorical"; col.catQ = true; col._conf = 0.72; return col;
+      }
+      col.type = "text"; col._conf = 0.85; return col;
+    }
+    if (distinct.length <= 20 && avgLen <= 60) { col.type = "categorical"; col._conf = distinct.length <= 12 ? 0.9 : 0.72; return col; }
+    col.type = "text"; col._conf = 0.55; // เดาจากการตัดตัวเลือกอื่นทิ้ง — ควรได้รับการตรวจยืนยัน
     return col;
   });
 }
@@ -954,7 +975,7 @@ function mergedIntoCols(colIdx, columns = state.columns) {
 function rowValueCombined(r, colIdx, columns = state.columns) {
   for (const i of [colIdx, ...mergedIntoCols(colIdx, columns)]) {
     const v = String(r[i] ?? "").trim();
-    if (v) return v;
+    if (v) return mappedValue(i, v); // แปลงตามการรวมหมวดที่ผู้ใช้ยืนยันแล้ว
   }
   return "";
 }
@@ -1370,7 +1391,7 @@ function renderActiveTab() {
   const render = {
     dashboard: renderDashboard, sections: renderSections, sdg: renderSdg,
     demo: renderDemographics, text: renderTexts, columns: renderColumns,
-    report: renderReport, history: renderHistory,
+    health: renderHealth, report: renderReport, history: renderHistory,
   }[state.activeTab];
   render(panel, rows);
   panel.classList.remove("anim-page");
@@ -1724,10 +1745,11 @@ function renderTexts(panel, rows) {
    แท็บ: ตั้งค่าคอลัมน์
    ============================================================ */
 const TYPE_LABELS = {
-  rating: "คะแนน 1–5", sdg: "SDG / สองค่า", categorical: "ข้อมูลทั่วไป (ตัวเลือก)",
+  rating: "คะแนน 1–5", sdg: "SDG / สองค่า", categorical: "ตัวเลือก / หมวดหมู่ (นับความถี่)",
   text: "ข้อความปลายเปิด", ignore: "ไม่วิเคราะห์",
 };
 function renderColumns(panel) {
+  mappingConfirmCard(panel);
   const card = cardEl(panel, "ชนิดของแต่ละคอลัมน์และการจัดด้าน", "เปลี่ยนชนิดข้อมูลหรือย้ายข้อคำถามไปด้านไหนก็ได้ — เลือก \"สร้างด้านใหม่…\" เพื่อตั้งด้านเอง แล้วผลวิเคราะห์ทุกแท็บจะคำนวณใหม่ทันที");
   const N = state.rows.length;
   const groupNames = [...new Set(state.columns.filter((c) => c.type === "rating" && c.group).map((c) => c.group))];
@@ -1755,22 +1777,26 @@ function renderColumns(panel) {
     } else {
       groupSel = `<span class="sugg-count">—</span>`;
     }
-    return `<tr>
-      <td class="item">${esc(c.header)}</td>
+    const cf = c._conf ?? 1;
+    const confChip = `<span class="conf-chip ${cf >= 0.8 ? "ok" : cf >= 0.6 ? "mid" : "low"}" title="ความมั่นใจของการจำแนกอัตโนมัติ — ต่ำกว่า 80% ควรตรวจและยืนยัน">${Math.round(cf * 100)}%</span>`;
+    return `<tr class="${cf < 0.8 && !state.mapConfirmed ? "row-lowconf" : ""}">
+      <td class="item">${esc(c.header)}${c.catQ ? ' <span class="lv l3">หมวดหมู่</span>' : ""}</td>
       <td class="num">${vals.length}/${N}<span class="meanbar" style="min-width:44px"><i style="width:${pct}%"></i></span></td>
       <td class="sample-vals">${esc(samples.slice(0, 90))}</td>
-      <td><select class="coltype" data-col="${c.i}">${opts}</select></td>
+      <td><select class="coltype" data-col="${c.i}">${opts}</select> ${confChip}</td>
       <td>${groupSel}</td>
     </tr>`;
   }).join("");
   card.insertAdjacentHTML("beforeend", `
     <div class="tbl-wrap"><table class="app">
-      <tr><th class="item">คอลัมน์</th><th>ตอบแล้ว</th><th class="item">ตัวอย่างคำตอบ</th><th>ชนิดข้อมูล</th><th>ด้าน/หมวด (เฉพาะคะแนน)</th></tr>${rowsHtml}
+      <tr><th class="item">คอลัมน์</th><th>ตอบแล้ว</th><th class="item">ตัวอย่างคำตอบ</th><th>ชนิดข้อมูล · ความมั่นใจ</th><th>ด้าน/หมวด (เฉพาะคะแนน)</th></tr>${rowsHtml}
     </table></div>`);
   $$("select.coltype:not(.colgroup)", card).forEach((sel) => {
     sel.onchange = () => {
       const col = state.columns[+sel.dataset.col];
       col.type = sel.value;
+      col._conf = 1; // ผู้ใช้เลือกเอง = ยืนยันแล้วรายคอลัมน์
+      state.mapConfirmed = false; // การจำแนกรวมเปลี่ยน — ให้ตรวจ/ยืนยันชุดใหม่อีกครั้ง
       if (col.type === "rating" && !col.group) {
         const b = col.header.match(/^(.*?)\s*\[(.+)\]\s*$/);
         if (b) { col.item = b[2].trim(); col.group = b[1].trim() || unnamedGroupName(col.item); }
@@ -1797,6 +1823,7 @@ function renderColumns(panel) {
       toast(col.mergeInto != null ? `รวม "${col.header.slice(0, 22)}" เข้ากับ "${state.columns[col.mergeInto].header.slice(0, 22)}"` : `แยก "${col.header.slice(0, 25)}" ออกมาแสดงเอง`);
     };
   });
+  respondentMapCard(panel);
   // เลือกว่าคอลัมน์ไหนลงรายงานราชการ
   $$("input.colreport", card).forEach((cb) => {
     cb.onchange = () => {
@@ -1893,6 +1920,316 @@ function passMark() {
 }
 
 /* ============================================================
+   Guided Evaluation Analysis — ตรวจสุขภาพข้อมูล · Mapping · ความพร้อมรายงาน
+   หลัก: ห้ามแก้/รวมข้อมูลอัตโนมัติ — ระบบเสนอ ผู้ใช้ยืนยันเสมอ และบันทึกทุกการแก้ลง cleanLog
+   ============================================================ */
+
+/* ---------- เครื่องมือเทียบข้อความ (หาหมวดที่สะกดต่างแต่หมายถึงสิ่งเดียวกัน) ---------- */
+function normalizeCat(s) {
+  return String(s).normalize("NFC").trim().toLowerCase()
+    .replace(/\s+/g, " ").replace(/[.ๆ]+$/g, "").replace(/[–—]/g, "-");
+}
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/** ค่าที่ผู้ใช้ยืนยันการรวม — ใช้แปลงค่าทุกจุดอ่านข้อมูลตัวเลือก (rowValueCombined) */
+function mappedValue(colIdx, v) {
+  const m = state.valueMap[colIdx];
+  return m && m[v] != null ? m[v] : v;
+}
+
+/** ชื่อกลุ่มผู้ตอบที่ใช้ในรายงาน (Respondent Mapping) — ไม่ตั้งไว้ = ใช้ค่าจริงจากไฟล์ */
+function labelOfStatus(v) {
+  return state.roleMap[v]?.label?.trim() || v;
+}
+const ROLE_OPTIONS = [
+  ["", "— ยังไม่ระบุ"], ["participant", "ผู้เข้าร่วม"], ["organizer", "ผู้จัดโครงการ"],
+  ["staff", "อาจารย์/บุคลากร"], ["teacher", "ครู/วิทยากร"], ["parent", "ผู้ปกครอง"],
+  ["community", "ชุมชน"], ["executive", "ผู้บริหาร"], ["volunteer", "อาสาสมัคร"], ["other", "อื่น ๆ"],
+];
+const ORGANIZER_ROLES = new Set(["organizer", "staff", "teacher", "executive"]);
+
+/* ---------- Data Health Check ---------- */
+let _healthKey = null, _health = null;
+
+function computeHealth() {
+  if (_health && _healthKey === _dataVersion) return _health;
+  const rows = state.rows, headers = state.headers, columns = state.columns;
+  const h = {
+    respondents: rows.length,
+    dupRowIdx: [], dupHeaders: [], emptyHeaders: [],
+    missing: [], outOfRange: [], unparsed: [], fuzzy: [],
+    issues: [],
+  };
+
+  // หัวคอลัมน์ซ้ำ/ว่าง
+  const seen = new Map();
+  headers.forEach((hd, i) => {
+    const t = String(hd).trim();
+    if (!t) { h.emptyHeaders.push(i); return; }
+    if (seen.has(t)) h.dupHeaders.push(t);
+    else seen.set(t, i);
+  });
+
+  // แถวซ้ำทั้งแถว (เทียบเฉพาะคอลัมน์ที่ใช้วิเคราะห์ — ข้าม timestamp/ignore)
+  const useIdx = columns.filter((c) => c.type !== "ignore").map((c) => c.i);
+  const rowKey = new Map();
+  rows.forEach((r, ri) => {
+    const k = useIdx.map((i) => String(r[i] ?? "").trim()).join("\u0001");
+    if (!k.replace(/\u0001/g, "")) return; // แถวว่างไม่ใช่แถวซ้ำ
+    if (rowKey.has(k)) h.dupRowIdx.push(ri);
+    else rowKey.set(k, ri);
+  });
+
+  // Missing / คะแนนนอกช่วง / ค่าที่แปลงไม่ได้
+  columns.forEach((c) => {
+    if (c.type === "ignore") return;
+    let miss = 0;
+    for (const r of rows) if (String(r[c.i] ?? "").trim() === "") miss++;
+    if (miss > 0) h.missing.push({ i: c.i, header: c.header, n: miss, pct: rows.length ? (miss / rows.length) * 100 : 0 });
+    if (c.type === "rating") {
+      let bad = 0, unp = 0;
+      const badEx = [];
+      for (const r of rows) {
+        const v = r[c.i];
+        if (v === "" || v == null) continue;
+        const num = typeof v === "number" ? v : (String(v).trim().match(/^-?\d+(\.\d+)?$/) ? parseFloat(v) : null);
+        if (num != null && (num < 1 || num > 5)) { bad++; if (badEx.length < 3) badEx.push(num); continue; }
+        if (parseRating(v) == null) unp++;
+      }
+      if (bad) h.outOfRange.push({ header: c.header, n: bad, examples: badEx });
+      if (unp) h.unparsed.push({ header: c.header, n: unp });
+    }
+  });
+
+  // หมวดที่อาจสะกดต่างกันแต่หมายถึงสิ่งเดียวกัน (เสนอเท่านั้น — รอผู้ใช้ยืนยัน)
+  columns.filter((c) => c.type === "categorical" && !c.mergeInto).forEach((c) => {
+    const freq = new Map();
+    for (const r of rows) {
+      const v = rowValueCombined(r, c.i);
+      if (v) freq.set(v, (freq.get(v) || 0) + 1);
+    }
+    const vals = [...freq.keys()];
+    for (let a = 0; a < vals.length; a++) {
+      for (let b = a + 1; b < vals.length; b++) {
+        const key = `${c.i}|${vals[a]}|${vals[b]}`;
+        if (state.fuzzyDismissed.includes(key)) continue;
+        const na = normalizeCat(vals[a]), nb = normalizeCat(vals[b]);
+        const dist = levenshtein(na, nb);
+        const maxLen = Math.max(na.length, nb.length);
+        const same = na === nb;
+        // ค่าที่ต่างกันเฉพาะตัวเลข (ชั้นปีที่ 1/2/3, รุ่นที่ 57/58) = คนละค่าจริง ไม่ใช่สะกดผิด
+        const digitOnlyDiff = !same && na.replace(/[0-9๐-๙]+/g, "#") === nb.replace(/[0-9๐-๙]+/g, "#");
+        const close = !digitOnlyDiff && maxLen > 3 && dist <= (maxLen <= 6 ? 1 : 2);
+        if (same || close) {
+          h.fuzzy.push({
+            colIdx: c.i, colHeader: c.header, key,
+            a: vals[a], b: vals[b], na: freq.get(vals[a]), nb: freq.get(vals[b]),
+            conf: same ? 99 : Math.round((1 - dist / maxLen) * 100),
+          });
+        }
+      }
+    }
+  });
+  h.fuzzy.sort((x, y) => y.conf - x.conf);
+
+  // สรุประดับปัญหา
+  const missTotal = h.missing.reduce((a, x) => a + x.n, 0);
+  if (h.outOfRange.length) h.issues.push({ lv: "crit", msg: `พบคะแนนนอกช่วง 1–5 ใน ${h.outOfRange.length} คอลัมน์ (เช่น ${esc(h.outOfRange[0].header.slice(0, 40))}: ${h.outOfRange[0].examples.join(", ")}) — ตรวจไฟล์ต้นทางหรือเปลี่ยนชนิดคอลัมน์` });
+  if (h.dupHeaders.length) h.issues.push({ lv: "crit", msg: `หัวคอลัมน์ซ้ำกัน: ${h.dupHeaders.slice(0, 3).map((x) => `"${esc(x.slice(0, 30))}"`).join(", ")} — ผลอาจถูกนับรวมผิดคอลัมน์` });
+  if (h.dupRowIdx.length) h.issues.push({ lv: "warn", msg: `พบแถวที่ข้อมูลซ้ำกันทั้งแถว ${h.dupRowIdx.length} แถว — อาจเป็นการกรอกซ้ำ (กดตัดได้ด้านล่าง)` });
+  if (h.fuzzy.length) h.issues.push({ lv: "warn", msg: `พบตัวเลือกที่สะกดคล้ายกัน ${h.fuzzy.length} คู่ — ตรวจและยืนยันการรวมด้านล่าง (ระบบไม่รวมให้อัตโนมัติ)` });
+  // ค่าว่างของคำถามปลายเปิดเป็นเรื่องปกติ — ไม่นับเป็นประเด็น; ว่างเกิน 85% มักเป็นคำถามเฉพาะกลุ่ม/กิ่งฟอร์ม → แจ้งเป็นข้อมูล
+  h.missing.filter((m) => m.pct > 20 && columns[m.i]?.type !== "text").forEach((m) => {
+    if (m.pct >= 85) h.issues.push({ lv: "info", msg: `"${esc(m.header.slice(0, 40))}" มีผู้ตอบเพียงบางกลุ่ม (ว่าง ${m.pct.toFixed(1)}%) — ปกติสำหรับคำถามเฉพาะกลุ่ม เช่น แบบประเมินของผู้จัด` });
+    else h.issues.push({ lv: "warn", msg: `"${esc(m.header.slice(0, 40))}" มีค่าว่าง ${m.n} ช่อง (${m.pct.toFixed(1)}%)` });
+  });
+  h.unparsed.forEach((u) => h.issues.push({ lv: "warn", msg: `"${esc(u.header.slice(0, 40))}" มีคำตอบที่แปลงเป็นคะแนนไม่ได้ ${u.n} ค่า — ข้อนั้นถูกตัดจากการคำนวณ (available-case)` }));
+  if (h.emptyHeaders.length) h.issues.push({ lv: "info", msg: `มีคอลัมน์หัวว่าง ${h.emptyHeaders.length} คอลัมน์ — ระบบตั้งชื่อให้อัตโนมัติแล้ว` });
+  h.missTotal = missTotal;
+  h.level = h.issues.some((x) => x.lv === "crit") ? "crit" : h.issues.some((x) => x.lv === "warn") ? "warn" : "pass";
+
+  _health = h;
+  _healthKey = _dataVersion;
+  return h;
+}
+
+/* ---------- ความพร้อมของรายงาน (Report Readiness) ---------- */
+function lowConfCols() {
+  return state.columns.filter((c) => c.type !== "ignore" && (c._conf ?? 1) < 0.8);
+}
+function computeReadiness() {
+  const h = computeHealth();
+  const crit = [], warn = [], info = [];
+  h.issues.forEach((x) => (x.lv === "crit" ? crit : x.lv === "warn" ? warn : info).push(x.msg));
+  const lc = lowConfCols();
+  if (lc.length && !state.mapConfirmed) {
+    crit.push(`มี ${lc.length} คอลัมน์ที่ระบบไม่มั่นใจการจำแนกชนิด และยังไม่ได้รับการยืนยัน — ตรวจที่แท็บ "ตั้งค่าคอลัมน์" แล้วกดยืนยัน`);
+  }
+  if (!String(state.reportOpts.objectives || "").trim()) {
+    warn.push("ยังไม่ได้กำหนดวัตถุประสงค์โครงการ — รายงานจะไม่สรุปการบรรลุวัตถุประสงค์");
+  }
+  const statusIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  if (statusIdx >= 0) {
+    const { entries, total } = catFreq(filteredRows(), statusIdx);
+    entries.filter((e) => e.n <= 2).forEach((e) => warn.push(`กลุ่ม "${labelOfStatus(e.label)}" มีผู้ตอบเพียง ${e.n} คน — ไม่ควรตีความเป็นตัวแทนของกลุ่ม`));
+    entries.filter((e) => e.n > 2 && total && (e.n / total) < 0.05).forEach((e) => info.push(`กลุ่ม "${labelOfStatus(e.label)}" มีสัดส่วนต่ำกว่า 5% ของผู้ตอบ`));
+    const unmapped = entries.filter((e) => !state.roleMap[e.label]?.role);
+    if (unmapped.length) info.push(`กลุ่มผู้ตอบ ${unmapped.length} ค่า ยังไม่ได้ระบุบทบาท (Respondent Mapping) — ระบุได้ที่แท็บ "ตั้งค่าคอลัมน์"`);
+  }
+  const score = Math.max(0, 100 - crit.length * 25 - warn.length * 6 - info.length * 1);
+  return { score, crit, warn, info, level: crit.length ? "crit" : warn.length ? "warn" : "pass" };
+}
+
+/* ---------- แท็บ: ตรวจข้อมูล ---------- */
+function renderHealth(panel) {
+  const h = computeHealth();
+  const rd = computeReadiness();
+
+  // การ์ดสรุป
+  const card = cardEl(panel, "ตรวจสุขภาพข้อมูล (Data Health Check)", "ตรวจโครงสร้างและคุณภาพข้อมูลก่อนวิเคราะห์ — ระบบจะเสนอสิ่งที่ควรแก้ แต่ไม่แก้ข้อมูลเองจนกว่าจะกดยืนยัน", "activity");
+  const nRating = state.columns.filter((c) => c.type === "rating").length;
+  const nCat = state.columns.filter((c) => c.type === "categorical").length;
+  const nText = state.columns.filter((c) => c.type === "text").length;
+  const lvLabel = { pass: "ผ่านการตรวจ", warn: "มีข้อควรระวัง", crit: "มีปัญหาสำคัญ" };
+  card.insertAdjacentHTML("beforeend", `
+    <div class="hlth-grid">
+      <div class="hlth-tile"><b>${h.respondents}</b><span>ผู้ตอบทั้งหมด</span></div>
+      <div class="hlth-tile"><b>${nRating}</b><span>คอลัมน์คะแนน</span></div>
+      <div class="hlth-tile"><b>${nCat}</b><span>ตัวเลือก/หมวดหมู่</span></div>
+      <div class="hlth-tile"><b>${nText}</b><span>ปลายเปิด</span></div>
+      <div class="hlth-tile"><b>${h.missTotal}</b><span>ช่องว่าง (Missing)</span></div>
+      <div class="hlth-tile hlth-${h.level}"><b>${lvLabel[h.level]}</b><span>สถานะข้อมูล</span></div>
+      <div class="hlth-tile hlth-${rd.level}"><b>${rd.score}/100</b><span>ความพร้อมรายงาน</span></div>
+    </div>
+    ${h.issues.length ? h.issues.map((x) => `<p class="hl-issue hl-${x.lv}">${x.lv === "crit" ? "⛔" : x.lv === "warn" ? "⚠️" : "ℹ️"} ${x.msg}</p>`).join("") : `<p class="hl-issue hl-pass">✅ ไม่พบปัญหาโครงสร้างข้อมูล</p>`}`);
+
+  // แถวซ้ำ
+  if (h.dupRowIdx.length || state.cleanLog.some((x) => x.t === "dedup")) {
+    const c2 = cardEl(panel, "แถวที่ซ้ำกันทั้งแถว", "คำตอบที่เหมือนกันทุกช่องอาจเป็นการกดส่งซ้ำ — ตัดออกได้โดยระบบจะบันทึกไว้ในรายงานส่วนการจัดการข้อมูล", "copy-x");
+    if (h.dupRowIdx.length) {
+      c2.insertAdjacentHTML("beforeend", `<button class="btn small" id="btnDedup"><i data-lucide="eraser"></i> ตัดแถวซ้ำ ${h.dupRowIdx.length} แถว (เหลือรายการแรกไว้)</button>`);
+      $("#btnDedup", c2).onclick = () => {
+        if (!confirm(`ตัดแถวซ้ำ ${h.dupRowIdx.length} แถวออกจากการวิเคราะห์?\nการตัดจะถูกบันทึกลงรายงาน (ส่วนการจัดการข้อมูล) และย้อนกลับได้โดยเปิดไฟล์ใหม่`)) return;
+        const del = new Set(h.dupRowIdx);
+        state.rows = state.rows.filter((_, i) => !del.has(i));
+        state.cleanLog.push({ t: "dedup", n: del.size, at: Date.now() });
+        bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
+        toast(`ตัดแถวซ้ำ ${del.size} แถวแล้ว`);
+      };
+    }
+    state.cleanLog.filter((x) => x.t === "dedup").forEach((x) => {
+      c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info">✂️ ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
+    });
+  }
+
+  // หมวดสะกดคล้าย
+  if (h.fuzzy.length || state.cleanLog.some((x) => x.t === "merge")) {
+    const c3 = cardEl(panel, "ตัวเลือกที่อาจหมายถึงสิ่งเดียวกัน", "ระบบตรวจพบค่าที่สะกดใกล้กันมาก — เลือกรวมหรือยืนยันว่าเป็นคนละค่า ระบบจะไม่รวมให้เองเด็ดขาด", "git-merge");
+    if (h.fuzzy.length) {
+      c3.insertAdjacentHTML("beforeend", `<div class="tbl-wrap"><table class="app">
+        <tr><th class="item">คอลัมน์</th><th class="item">ค่าที่พบ</th><th class="item">ค่าที่คล้ายกัน</th><th>ความมั่นใจ</th><th></th></tr>
+        ${h.fuzzy.slice(0, 20).map((f, fi) => `<tr>
+          <td class="item">${esc(f.colHeader.slice(0, 26))}</td>
+          <td class="item">${esc(f.a)} <span class="sugg-count">(${f.na})</span></td>
+          <td class="item">${esc(f.b)} <span class="sugg-count">(${f.nb})</span></td>
+          <td class="num">${f.conf}%</td>
+          <td style="white-space:nowrap">
+            <button class="btn small" data-fz-merge="${fi}"><i data-lucide="git-merge"></i> รวมเป็น "${esc((f.na >= f.nb ? f.a : f.b).slice(0, 14))}"</button>
+            <button class="btn small" data-fz-keep="${fi}">คนละค่า</button>
+          </td>
+        </tr>`).join("")}
+      </table></div>`);
+      $$("[data-fz-merge]", c3).forEach((b) => (b.onclick = () => {
+        const f = h.fuzzy[+b.dataset.fzMerge];
+        const to = f.na >= f.nb ? f.a : f.b;
+        const from = f.na >= f.nb ? f.b : f.a;
+        if (!confirm(`รวม "${from}" (${Math.min(f.na, f.nb)} รายการ) เข้ากับ "${to}"?\nบันทึกลงรายงานส่วนการจัดการข้อมูล`)) return;
+        state.valueMap[f.colIdx] = state.valueMap[f.colIdx] || {};
+        state.valueMap[f.colIdx][from] = to;
+        state.cleanLog.push({ t: "merge", col: f.colHeader, from, to, at: Date.now() });
+        bumpDataVersion(); saveSessionSnapshot(); renderFilterBar(); renderActiveTab();
+        toast(`รวม "${from.slice(0, 20)}" → "${to.slice(0, 20)}" แล้ว`);
+      }));
+      $$("[data-fz-keep]", c3).forEach((b) => (b.onclick = () => {
+        const f = h.fuzzy[+b.dataset.fzKeep];
+        state.fuzzyDismissed.push(f.key);
+        _healthKey = null; saveSessionSnapshot(); renderActiveTab();
+        toast("บันทึกแล้วว่าเป็นคนละค่า");
+      }));
+    }
+    state.cleanLog.filter((x) => x.t === "merge").forEach((x) => {
+      c3.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info">🔀 รวม "${esc(x.from)}" → "${esc(x.to)}" ในคอลัมน์ ${esc(String(x.col).slice(0, 30))}</p>`);
+    });
+  }
+
+  // Missing รายคอลัมน์
+  if (h.missing.length) {
+    const c4 = cardEl(panel, "ค่าว่างรายคอลัมน์ (Missing)", "การวิเคราะห์ใช้แบบ available-case: คำนวณจากผู้ที่ตอบข้อนั้นจริง ไม่แทนค่าว่างด้วยศูนย์", "circle-dashed");
+    c4.insertAdjacentHTML("beforeend", `<div class="tbl-wrap"><table class="app">
+      <tr><th class="item">คอลัมน์</th><th>ว่าง (ช่อง)</th><th>ร้อยละ</th><th class="item">ตอบจริง (valid)</th></tr>
+      ${h.missing.sort((a, b) => b.n - a.n).slice(0, 15).map((m) => `<tr>
+        <td class="item">${esc(m.header.slice(0, 48))}</td><td class="num">${m.n}</td>
+        <td class="num">${m.pct.toFixed(1)}</td><td class="item">${state.rows.length - m.n} จาก ${state.rows.length}</td>
+      </tr>`).join("")}
+    </table></div>`);
+  }
+  refreshIcons();
+}
+
+/* ---------- การ์ดกลุ่มผู้ตอบ (Respondent Mapping) — ใช้ในแท็บตั้งค่าคอลัมน์ ---------- */
+function respondentMapCard(panel) {
+  const statusIdx = state.columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  if (statusIdx < 0) return;
+  const { entries } = catFreq(state.rows, statusIdx);
+  if (!entries.length) return;
+  const card = cardEl(panel, "กลุ่มผู้ตอบและคำเรียกในรายงาน (Respondent Mapping)", "ระบุว่าแต่ละค่าในคอลัมน์สถานะคือใคร — ระบบใช้จัดฐานผู้ประเมิน (ผู้เข้าร่วม vs ผู้จัด) และใช้คำเรียกนี้ในรายงาน", "users");
+  card.insertAdjacentHTML("beforeend", `<div class="tbl-wrap"><table class="app">
+    <tr><th class="item">ค่าที่พบในไฟล์</th><th>จำนวน</th><th>บทบาท</th><th class="item">คำเรียกในรายงาน</th></tr>
+    ${entries.map((e, i) => `<tr>
+      <td class="item">${esc(e.label)}</td><td class="num">${e.n}</td>
+      <td><select class="coltype" data-role-sel="${i}">${ROLE_OPTIONS.map(([v, l]) => `<option value="${v}" ${(state.roleMap[e.label]?.role || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+      <td class="item"><input type="text" class="rm-label" data-role-lb="${i}" value="${esc(state.roleMap[e.label]?.label || "")}" placeholder="${esc(e.label)}"></td>
+    </tr>`).join("")}
+  </table></div>
+  <p class="card-sub">บทบาท "ผู้จัดโครงการ / อาจารย์-บุคลากร / ครู-วิทยากร / ผู้บริหาร" จะถูกแยกเป็นฐานผู้ประเมินคนละฐานกับผู้เข้าร่วมโดยอัตโนมัติ</p>`);
+  const upd = (i, patch) => {
+    const key = entries[i].label;
+    state.roleMap[key] = { ...(state.roleMap[key] || {}), ...patch };
+    bumpDataVersion(); saveSessionSnapshot();
+  };
+  $$("[data-role-sel]", card).forEach((s) => (s.onchange = () => { upd(+s.dataset.roleSel, { role: s.value }); renderActiveTab(); toast("บันทึกบทบาทแล้ว — ฐานผู้ประเมินในรายงานคำนวณใหม่"); }));
+  $$("[data-role-lb]", card).forEach((inp) => (inp.onchange = () => { upd(+inp.dataset.roleLb, { label: inp.value }); toast("บันทึกคำเรียกในรายงานแล้ว"); }));
+}
+
+/* ---------- การ์ดยืนยันการจำแนกคำถาม (Question Mapping Confirmation) ---------- */
+function mappingConfirmCard(panel) {
+  const lc = lowConfCols();
+  const card = document.createElement("div");
+  card.className = "card mapping-confirm " + (state.mapConfirmed ? "ok" : lc.length ? "warn" : "ok");
+  card.innerHTML = state.mapConfirmed
+    ? `<p class="hl-issue hl-pass" style="margin:0">✅ การจำแนกชนิดคำถามได้รับการยืนยันแล้ว — แก้ชนิดคอลัมน์เมื่อใด สถานะจะกลับเป็นรอยืนยัน</p>`
+    : `<p class="hl-issue ${lc.length ? "hl-warn" : "hl-info"}" style="margin:0 0 8px">${lc.length ? `⚠️ ระบบไม่มั่นใจการจำแนก ${lc.length} คอลัมน์ (ความมั่นใจต่ำกว่า 80% — ไฮไลต์ในตาราง)` : "ℹ️ ตรวจการจำแนกชนิดคำถามด้านล่าง"} แล้วกดยืนยันเพื่อให้รายงานพ้นสถานะฉบับร่าง</p>
+      <button class="btn small primary" id="btnConfirmMap"><i data-lucide="check-check"></i> ตรวจแล้ว — ยืนยันการจำแนกทั้งหมด</button>`;
+  panel.appendChild(card);
+  const btn = $("#btnConfirmMap", card);
+  if (btn) btn.onclick = () => { state.mapConfirmed = true; saveSessionSnapshot(); renderActiveTab(); toast("ยืนยันการจำแนกคำถามแล้ว"); };
+}
+
+/* ============================================================
    รายงานราชการ — โครง 8 ส่วน + ภาคผนวก
    หลักสำคัญ: แยกฐานผู้ประเมิน (ห้ามปนตาราง/กราฟข้ามฐานโดยไม่บอก n)
    · กราฟเนื้อหาหลัก ≤ 2 · ความคิดเห็นปลายเปิดจัดเป็น Theme
@@ -1924,10 +2261,10 @@ function respondentsOfGroup(rows, g, columns) {
     }
   }
   const list = [...byStatus.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count }));
-  let text;
+  let text; // คำเรียกกลุ่มในรายงานมาจาก Respondent Mapping (labelOfStatus)
   if (!list.length) text = `ผู้เข้าร่วมโครงการที่ตอบแบบประเมิน จำนวน ${n} คน`;
-  else if (list.length === 1) text = `${list[0].label} จำนวน ${n} คน`;
-  else text = joinThai(list.map((x) => `${x.label} จำนวน ${x.count} คน`)) + ` รวม ${n} คน`;
+  else if (list.length === 1) text = `${labelOfStatus(list[0].label)} จำนวน ${n} คน`;
+  else text = joinThai(list.map((x) => `${labelOfStatus(x.label)} จำนวน ${x.count} คน`)) + ` รวม ${n} คน`;
   return { n, text, list };
 }
 
@@ -1936,16 +2273,28 @@ function respondentsOfGroup(rows, g, columns) {
 function groupBases(rows, groups, columns) {
   const infos = groups.map((g) => ({ g, who: respondentsOfGroup(rows, g, columns) }));
   const maxN = Math.max(0, ...infos.map((x) => x.who.n));
+  const anyRole = infos.some((x) => x.who.list.some((st) => state.roleMap[st.label]?.role));
   const main = [], minor = [];
-  infos.forEach((x) => ((maxN && x.who.n < maxN * 0.6) ? minor : main).push(x));
+  infos.forEach((x) => {
+    let small;
+    if (anyRole) {
+      // ผู้ใช้ระบุบทบาทแล้ว: ด้านที่ผู้ตอบเกือบทั้งหมดเป็นฝั่งผู้จัด/บุคลากร → ฐานผู้จัด
+      const orgN = x.who.list.filter((st) => ORGANIZER_ROLES.has(state.roleMap[st.label]?.role)).reduce((a, st) => a + st.count, 0);
+      small = x.who.n > 0 && orgN / x.who.n >= 0.8;
+      if (!small && maxN && x.who.n < maxN * 0.6) small = true;
+    } else {
+      small = maxN > 0 && x.who.n < maxN * 0.6;
+    }
+    (small ? minor : main).push(x);
+  });
   const mkBase = (list, kind) => {
     const rep = list.reduce((a, b) => (b.who.n > a.who.n ? b : a), list[0]);
-    const statuses = rep.who.list.map((s) => s.label).join(" ");
+    const statuses = rep.who.list.map((s) => labelOfStatus(s.label) + " " + (state.roleMap[s.label]?.role || "")).join(" ");
     let title;
     if (kind === "main") {
       title = /นักศึกษา|ผู้เข้าร่วม/.test(statuses) || !statuses ? "ผลการประเมินจากผู้เข้าร่วมโครงการ" : `ผลการประเมินจาก${rep.who.list[0]?.label || "ผู้ตอบแบบประเมิน"}`;
     } else {
-      title = /สโมสร|ชุมนุม|อาจารย์|บุคลากร|กรรมการ|ผู้จัด|หลักสูตร/.test(statuses) ? "ผลการประเมินจากผู้จัดโครงการและบุคลากร" : `ผลการประเมินจาก${rep.who.list[0]?.label || "ผู้ประเมินกลุ่มเฉพาะ"}`;
+      title = /สโมสร|ชุมนุม|อาจารย์|บุคลากร|กรรมการ|ผู้จัด|หลักสูตร|organizer|staff|teacher|executive/.test(statuses) ? "ผลการประเมินจากผู้จัดโครงการและบุคลากร" : `ผลการประเมินจาก${labelOfStatus(rep.who.list[0]?.label || "") || "ผู้ประเมินกลุ่มเฉพาะ"}`;
     }
     return { kind, title, n: rep.who.n, whoText: rep.who.text, list };
   };
@@ -2203,7 +2552,7 @@ function methodologyBlock(ds, num, pm, multi, datasets) {
       html += wTable(
         ["กลุ่มผู้ประเมิน", "จำนวน (คน)", "ร้อยละ", "ประเด็นที่ประเมิน"],
         [
-          ...entries.map((e) => [cell(esc(e.label), "left"), cell(String(e.n)), cell(e.pct.toFixed(2)), cell(esc(topicOf(e.label)), "left")]),
+          ...entries.map((e) => [cell(esc(labelOfStatus(e.label)), "left"), cell(String(e.n)), cell(e.pct.toFixed(2)), cell(esc(topicOf(e.label)), "left")]),
           [cell("รวม", "center", true), cell(String(total), "center", true), cell("100.00", "center", true), cell("—", "center", true)],
         ]
       );
@@ -2217,7 +2566,19 @@ function methodologyBlock(ds, num, pm, multi, datasets) {
   html += subHeadHtml(`${s}.3  สถิติและเกณฑ์การแปลผล`);
   html += wp(`วิเคราะห์ข้อมูลด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) ${esc(CRITERIA_NOTE)} ทั้งนี้ โครงการหรือประเด็นการประเมินถือว่า<b>ผ่านเกณฑ์</b>เมื่อมีค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป`);
 
-  // 1.4 ข้อจำกัดของข้อมูล — สร้างเฉพาะข้อที่เกิดขึ้นจริงกับข้อมูลชุดนี้
+  // 1.4 การจัดการข้อมูล — วิธีจัดการ missing + บันทึกการทำความสะอาดที่ผู้ใช้ยืนยัน
+  html += subHeadHtml(`${s}.4  การจัดการข้อมูล`);
+  const mgmt = [`วิเคราะห์รายข้อแบบ available-case คือคำนวณจากผู้ที่ตอบข้อนั้นจริง (ระบุจำนวนผู้ตอบ n กำกับ) โดยไม่แทนค่าที่ว่างด้วยศูนย์`];
+  const hh = computeHealth();
+  if (hh.missTotal) mgmt.push(`ข้อมูลมีช่องที่ไม่ได้ตอบ (missing) รวม ${hh.missTotal} ช่อง`);
+  state.cleanLog.forEach((x) => {
+    if (x.t === "dedup") mgmt.push(`ตรวจพบและตัดแถวข้อมูลที่ซ้ำกันทั้งแถวออก ${x.n} แถว`);
+    if (x.t === "merge") mgmt.push(`รวมตัวเลือกที่สะกดต่างกัน "${x.from}" เข้ากับ "${x.to}" หลังการตรวจยืนยัน`);
+  });
+  mgmt.push(state.mapConfirmed ? `การจำแนกชนิดคำถามผ่านการตรวจสอบและยืนยันโดยผู้จัดทำ` : `การจำแนกชนิดคำถามใช้การตรวจอัตโนมัติของระบบ [โปรดตรวจสอบและยืนยันที่แท็บตั้งค่าคอลัมน์]`);
+  mgmt.forEach((m, i2) => { html += wp(`${i2 + 1}) ${m}`, { indent: false, align: "justify" }); });
+
+  // 1.5 ข้อจำกัดของข้อมูล — สร้างเฉพาะข้อที่เกิดขึ้นจริงกับข้อมูลชุดนี้
   const limits = [];
   if (bases.length > 1) {
     limits.push(`การประเมินบางด้านใช้กลุ่มผู้ประเมินต่างกันและมีจำนวนผู้ตอบไม่เท่ากัน ผลของแต่ละด้านจึงควรพิจารณาภายในฐานผู้ตอบของตนเอง และไม่ควรนำค่าเฉลี่ยจากคนละกลุ่มมาเปรียบเทียบกันโดยตรง`);
@@ -2231,7 +2592,7 @@ function methodologyBlock(ds, num, pm, multi, datasets) {
     limits.push(`ผลความสอดคล้องกับ SDGs เป็นการประเมินการรับรู้ของผู้ตอบแบบประเมิน มิใช่การประเมินผลกระทบตามตัวชี้วัด SDGs อย่างเป็นทางการ`);
   }
   if (limits.length) {
-    html += subHeadHtml(`${s}.4  ข้อจำกัดของข้อมูล`);
+    html += subHeadHtml(`${s}.5  ข้อจำกัดของข้อมูล`);
     limits.forEach((l, i) => { html += wp(`${i + 1}) ${l}`, { indent: false, align: "justify" }); });
   }
   return { title: `ส่วนที่ ${s} วิธีการประเมินโครงการ`, html };
@@ -2265,13 +2626,23 @@ function execSummaryBlock(datasets, num, pm, multi) {
   const s = num.sec;
   let html = secHeadHtml(s, "บทสรุปผลการประเมินสำหรับผู้บริหาร");
 
-  let p1 = `ผลการประเมินสะท้อนว่า${allOk ? "โครงการสามารถดำเนินงานได้ตามเป้าหมาย โดยผลการประเมินทุกด้านผ่านเกณฑ์ที่กำหนด" : `โครงการผ่านเกณฑ์ความสำเร็จ ${passCount} จากทั้งหมด ${groupCount} ด้าน`} มีผู้ตอบแบบประเมินรวม ${totalResp} คน${allInfos._bases > 1 ? ` จากผู้ประเมิน ${allInfos._bases} กลุ่ม` : ""} ค่าเฉลี่ยรายด้านอยู่ระหว่าง ${f2(mn)} ถึง ${f2(mx)} คะแนน จุดแข็งสำคัญคือ${esc(top.g.name)} (x̄ = ${f2(top.g.total.mean)} ระดับ${levelLabel(top.g.total.mean)}) ขณะที่ด้านที่มีค่าเฉลี่ยต่ำกว่าด้านอื่นคือ${esc(low.g.name)} (x̄ = ${f2(low.g.total.mean)})${low.g.total.mean >= pm ? ` แม้ยังผ่านเกณฑ์และอยู่ในระดับ${levelLabel(low.g.total.mean)} จึงถือเป็นประเด็นที่มีโอกาสพัฒนา` : " ซึ่งไม่ผ่านเกณฑ์และควรได้รับการปรับปรุง"}`;
+  let p1 = `ผลการประเมินสะท้อนว่า${allOk ? "โครงการได้รับการประเมินในเชิงบวก โดยผลการประเมินทุกด้านผ่านเกณฑ์ที่กำหนด" : `โครงการผ่านเกณฑ์ความสำเร็จ ${passCount} จากทั้งหมด ${groupCount} ด้าน`} มีผู้ตอบแบบประเมินรวม ${totalResp} คน${allInfos._bases > 1 ? ` จากผู้ประเมิน ${allInfos._bases} กลุ่ม` : ""} ค่าเฉลี่ยรายด้านอยู่ระหว่าง ${f2(mn)} ถึง ${f2(mx)} คะแนน จุดแข็งสำคัญคือ${esc(top.g.name)} (x̄ = ${f2(top.g.total.mean)} ระดับ${levelLabel(top.g.total.mean)}) ขณะที่ด้านที่มีค่าเฉลี่ยต่ำกว่าด้านอื่นคือ${esc(low.g.name)} (x̄ = ${f2(low.g.total.mean)})${low.g.total.mean >= pm ? ` แม้ยังผ่านเกณฑ์และอยู่ในระดับ${levelLabel(low.g.total.mean)} จึงถือเป็นประเด็นที่มีโอกาสพัฒนา` : " ซึ่งไม่ผ่านเกณฑ์และควรได้รับการปรับปรุง"}`;
   if (okSdg.length) p1 += ` นอกจากนี้ ผู้ตอบรับรู้ว่าโครงการสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน ${okSdg.length} จาก ${allSdgs.length} เป้าหมายที่ประเมิน`;
   html += wp(p1);
   if (impTop.length) {
     html += wp(`เมื่อพิจารณาร่วมกับความคิดเห็นปลายเปิด พบว่าประเด็นที่ควรให้ความสำคัญในการจัดโครงการครั้งต่อไป ได้แก่ ${joinThai(impTop)} (รายละเอียดในส่วนการวิเคราะห์ความคิดเห็นและข้อเสนอแนะ)`);
   }
-  html += wp(`<b>ข้อสรุป: ${allOk ? "โครงการบรรลุผลตามเกณฑ์การประเมินที่กำหนด" : passCount ? "โครงการบรรลุผลตามเกณฑ์เป็นบางส่วน" : "โครงการยังไม่บรรลุผลตามเกณฑ์ที่กำหนด"}</b> (เกณฑ์ความสำเร็จ: ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ผ่าน ${passCount}/${groupCount} ด้าน)`, { indent: false, align: "left" });
+  // ข้อสรุปการบรรลุวัตถุประสงค์ — สรุปได้เฉพาะเมื่อผู้ใช้เชื่อมวัตถุประสงค์กับตัวชี้วัดแล้ว (Objective Mapping)
+  const oe = evalObjectives(groupBases(datasets[0].rows, datasets[0].analysis.groups, datasets[0].columns), pm);
+  let verdict;
+  if (oe && oe.evaluable > 0) {
+    if (oe.reached === oe.total) verdict = `โครงการบรรลุวัตถุประสงค์ครบทั้ง ${oe.total} ข้อ และผลการประเมินผ่านเกณฑ์ ${passCount}/${groupCount} ด้าน`;
+    else if (oe.reached > 0) verdict = `โครงการบรรลุวัตถุประสงค์ ${oe.reached} จาก ${oe.evaluable} ข้อที่มีตัวชี้วัดรองรับ${oe.unresolved ? ` (อีก ${oe.unresolved} ข้อข้อมูลไม่เพียงพอสำหรับสรุป)` : ""}`;
+    else verdict = `โครงการยังไม่บรรลุวัตถุประสงค์ตามเกณฑ์ที่กำหนด (0 จาก ${oe.evaluable} ข้อที่มีตัวชี้วัดรองรับ)`;
+  } else {
+    verdict = `ผลการประเมิน${allOk ? `ทั้ง ${groupCount} ด้าน` : `${passCount} จาก ${groupCount} ด้าน`}ผ่านเกณฑ์ที่กำหนด อย่างไรก็ตาม ยังไม่สามารถสรุปการบรรลุวัตถุประสงค์โครงการได้ เนื่องจากยังไม่ได้กำหนดความสัมพันธ์ระหว่างวัตถุประสงค์และตัวชี้วัด`;
+  }
+  html += wp(`<b>ข้อสรุป: ${verdict}</b> (เกณฑ์ความสำเร็จ: ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป)`, { indent: false, align: "left" });
 
   // ตารางสรุปรายด้าน แยกกลุ่มฐานด้วยแถวหัวเรื่อง — ไม่ปนฐานโดยไม่บอก และไม่เขียน n ซ้ำทุกแถว
   num.table++;
@@ -2398,6 +2769,26 @@ function datasetBlocks(ds, num, rk) {
     blocks.push({ title: `ส่วนที่ ${s} SDGs`, html });
   }
 
+  // ---------- ส่วนผลคำถามเชิงหมวดหมู่ (เช่น ฐานกิจกรรมที่ประทับใจมากที่สุด) ----------
+  const catQCols = columns.filter((c) => c.type === "categorical" && c.catQ && !c.noReport && !c.mergeInto);
+  if (catQCols.length) {
+    num.sec++;
+    const sq = num.sec;
+    let qh = secHeadHtml(sq, "ผลคำถามเชิงหมวดหมู่");
+    catQCols.forEach((c) => {
+      const { entries, total } = catFreq(rows, c.i, columns);
+      if (!entries.length) return;
+      num.table++;
+      qh += wCaption(num.table, `จำนวนและร้อยละของคำตอบ "${c.header}" เรียงตามความถี่ (ผู้ตอบ ${total} คน)`);
+      qh += wTable(
+        [esc(c.header), "จำนวน (คน)", "ร้อยละ", "ลำดับ"],
+        entries.slice(0, 15).map((e, i2) => [cell(esc(e.label), "left"), cell(String(e.n)), cell(e.pct.toFixed(2)), cell(String(i2 + 1))])
+      );
+      qh += wp(`คำตอบที่ถูกเลือกมากที่สุดคือ${esc(entries[0].label)} (${entries[0].n} คน คิดเป็นร้อยละ ${entries[0].pct.toFixed(2)})${entries.length > 15 ? ` ทั้งนี้ ตารางแสดงเฉพาะ 15 อันดับแรกจากทั้งหมด ${entries.length} ค่า` : ""}`);
+    });
+    blocks.push({ title: `ส่วนที่ ${sq} ผลคำถามเชิงหมวดหมู่`, html: qh });
+  }
+
   // ---------- ส่วนการวิเคราะห์ความคิดเห็นปลายเปิด ----------
   if (cc.total > 0) {
     num.sec++;
@@ -2446,48 +2837,60 @@ function datasetBlocks(ds, num, rk) {
   return { blocks, appendix };
 }
 
-/** ส่วนการบรรลุวัตถุประสงค์ — จับคู่วัตถุประสงค์ (ผู้ใช้กรอก) กับด้านการประเมิน */
-function objectivesBlock(ds, num, pm, bases) {
+/** ประเมินการบรรลุวัตถุประสงค์ (คำนวณอย่างเดียว — ใช้ทั้งบทสรุปผู้บริหารและส่วนวัตถุประสงค์) */
+function evalObjectives(bases, pm) {
   const objText = String(state.reportOpts.objectives || "").trim();
-  const allG = bases.flatMap((b) => b.list);
-  if (!objText) {
-    if (allG.length) addTodo("ยังไม่ได้กรอกวัตถุประสงค์โครงการ — ส่วน “การบรรลุวัตถุประสงค์” จะยังไม่ปรากฏในเอกสาร (กรอกในช่องด้านซ้าย)");
-    return null;
-  }
+  if (!objText) return null;
   const lines = objText.split("\n").map((x) => x.trim()).filter(Boolean);
   if (!lines.length) return null;
-  num.sec++;
-  const s = num.sec;
-  num.table++;
-  let html = secHeadHtml(s, "การบรรลุวัตถุประสงค์ของโครงการ");
-  html += wp(`ผู้จัดทำนำวัตถุประสงค์ของโครงการมาเชื่อมโยงกับผลการประเมินด้านที่เกี่ยวข้องโดยตรง โดยถือเกณฑ์ความสำเร็จที่ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ดังตารางที่ ${num.table}`);
-  html += wCaption(num.table, "การบรรลุวัตถุประสงค์ของโครงการ เทียบกับตัวชี้วัดจากผลการประเมิน");
+  const allG = bases.flatMap((b) => b.list);
   let reached = 0, unresolved = 0;
-  const trows = lines.map((line) => {
+  const rows = lines.map((line) => {
     const [obj, indPart] = line.split("|").map((x) => (x || "").trim());
     let matched = [];
     if (indPart) {
       const wants = indPart.split(",").map((x) => x.trim()).filter(Boolean);
       matched = allG.filter((x) => wants.some((w) => x.g.name.includes(w) || w.includes(x.g.name)));
     }
-    if (!matched.length && indPart) addTodo(`วัตถุประสงค์ “${obj.slice(0, 40)}…” ระบุด้าน “${indPart}” แต่จับคู่กับด้านการประเมินไม่ได้ — ตรวจชื่อด้านให้ตรง`);
-    if (!matched.length) {
-      unresolved++;
-      return [cell(esc(obj), "left"), cell("—", "left"), cell("—"), cell(`≥ ${pm.toFixed(2)}`), cell("ข้อมูลไม่เพียงพอสำหรับสรุป", "center", true)];
-    }
+    if (!matched.length) { unresolved++; return { obj, indPart, matched, insufficient: true }; }
     const meanM = matched.reduce((a, x) => a + x.g.total.mean, 0) / matched.length;
     const ok = meanM >= pm;
     if (ok) reached++;
+    return { obj, indPart, matched, meanM, ok };
+  });
+  return { rows, total: lines.length, reached, unresolved, evaluable: lines.length - unresolved };
+}
+
+/** ส่วนการบรรลุวัตถุประสงค์ — จับคู่วัตถุประสงค์ (ผู้ใช้กรอก) กับด้านการประเมิน */
+function objectivesBlock(ds, num, pm, bases) {
+  const oe = evalObjectives(bases, pm);
+  if (!oe) {
+    if (bases.length) addTodo("ยังไม่ได้กรอกวัตถุประสงค์โครงการ — รายงานจะไม่สรุปการบรรลุวัตถุประสงค์ (กรอกได้ในตั้งค่ารายงาน)");
+    return null;
+  }
+  num.sec++;
+  const s = num.sec;
+  num.table++;
+  let html = secHeadHtml(s, "การบรรลุวัตถุประสงค์ของโครงการ");
+  html += wp(`ผู้จัดทำนำวัตถุประสงค์ของโครงการมาเชื่อมโยงกับผลการประเมินด้านที่เกี่ยวข้องโดยตรง โดยถือเกณฑ์ความสำเร็จที่ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ดังตารางที่ ${num.table}`);
+  html += wCaption(num.table, "การบรรลุวัตถุประสงค์ของโครงการ เทียบกับตัวชี้วัดจากผลการประเมิน");
+  const trows = oe.rows.map((r) => {
+    if (r.insufficient) {
+      if (r.indPart) addTodo(`วัตถุประสงค์ “${r.obj.slice(0, 40)}…” ระบุด้าน “${r.indPart}” แต่จับคู่กับด้านการประเมินไม่ได้ — ตรวจชื่อด้านให้ตรง`);
+      return [cell(esc(r.obj), "left"), cell("—", "left"), cell("—"), cell(`≥ ${pm.toFixed(2)}`), cell("ข้อมูลไม่เพียงพอสำหรับสรุป", "center", true)];
+    }
     return [
-      cell(esc(obj), "left"),
-      cell(esc(matched.map((x) => x.g.name).join(", ")), "left"),
-      cell(f2(meanM)),
+      cell(esc(r.obj), "left"),
+      cell(esc(r.matched.map((x) => x.g.name).join(", ")), "left"),
+      cell(f2(r.meanM)),
       cell(`≥ ${pm.toFixed(2)}`),
-      cell(ok ? "บรรลุ" : "ไม่บรรลุ", "center", !ok),
+      cell(r.ok ? "บรรลุ" : "ไม่บรรลุ", "center", !r.ok),
     ];
   });
   html += wTable(["วัตถุประสงค์โครงการ", "ตัวชี้วัดที่ใช้พิจารณา (ด้านการประเมิน)", "ผลการประเมิน (x̄)", "เกณฑ์", "ข้อสรุป"], trows);
-  const evaluable = lines.length - unresolved;
+  const { reached, unresolved } = oe;
+  const lines = { length: oe.total };
+  const evaluable = oe.evaluable;
   let concl;
   if (!evaluable) concl = "วัตถุประสงค์ทุกข้อยังไม่มีตัวชี้วัดจากแบบประเมินรองรับ จึงไม่สามารถยืนยันการบรรลุวัตถุประสงค์จากข้อมูลชุดนี้ได้";
   else if (reached === lines.length) concl = "โครงการบรรลุวัตถุประสงค์ครบทุกข้อตามเกณฑ์ที่กำหนด";
@@ -2550,16 +2953,16 @@ function appendixBlocks(ds, num, rk, bases) {
       if (!rItems.length) return;
       num.appTable++;
       const head = withFreq
-        ? ["รายการประเมิน", "5", "4", "3", "2", "1", "x̄", "S.D.", "ระดับผล"]
-        : ["รายการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"];
+        ? ["รายการประเมิน", "n", "5", "4", "3", "2", "1", "x̄", "S.D.", "ระดับผล"]
+        : ["รายการประเมิน", "n", "x̄", "S.D.", "ระดับผลการประเมิน"];
       const body = rItems.map((it) => {
         const st = it.stats;
-        const base = [cell(esc(it.label), "left")];
+        const base = [cell(esc(it.label), "left"), cell(String(st.n))];
         if (withFreq) [5, 4, 3, 2, 1].forEach((lv) => base.push(cell(`${st.freq[lv]}<br>(${st.n ? ((st.freq[lv] / st.n) * 100).toFixed(1) : "0.0"})`)));
         base.push(cell(f2(st.mean)), cell(f2(st.sd)), cell(levelLabel(st.mean)));
         return base;
       });
-      const totalRow = [cell("รวม", "center", true)];
+      const totalRow = [cell("รวม", "center", true), cell("")];
       if (withFreq) [5, 4, 3, 2, 1].forEach(() => totalRow.push(cell("")));
       totalRow.push(cell(f2(g.total.mean), "center", true), cell(f2(g.total.sd), "center", true), cell(levelLabel(g.total.mean), "center", true));
       body.push(totalRow);
@@ -2582,7 +2985,7 @@ function appendixBlocks(ds, num, rk, bases) {
 
   // ข. ข้อมูลทั่วไปของผู้ตอบโดยละเอียด (คอลัมน์ categorical อื่นนอกจากสถานะที่สรุปไว้ในส่วนที่ 1)
   const statusIdx = columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
-  const catCols = columns.filter((c) => c.type === "categorical" && !c.mergeInto && !c.noReport && c.i !== statusIdx);
+  const catCols = columns.filter((c) => c.type === "categorical" && !c.catQ && !c.mergeInto && !c.noReport && c.i !== statusIdx);
   const catHtml = [];
   catCols.forEach((c) => {
     const { entries, total } = catFreq(rows, c.i, columns);
@@ -2620,6 +3023,7 @@ function appendixBlocks(ds, num, rk, bases) {
 
 function renderReport(panel, rows) {
   const blocks = buildReportBlocks(rows);
+  const rd = computeReadiness();
   if (state.reportOpts.thaiNum) blocks.forEach((b) => { b.html = toThaiDigits(b.html); });
   const allHtml = () => blocks.map((b) => b.html).join("");
   const cs = state.reportOpts.chartStyle;
@@ -2631,6 +3035,7 @@ function renderReport(panel, rows) {
     <div class="rp-topbar anim-slide-l">
       <span class="rp-docname"><i data-lucide="file-text"></i> รายงานผลการประเมิน</span>
       <span class="rp-pages">${blocks.length} ส่วน</span>
+      <span class="rp-ready rp-ready-${rd.level}" title="คะแนนความพร้อมของรายงาน — ดูรายละเอียดที่แท็บตรวจข้อมูล">${rd.crit.length ? "ฉบับร่าง · " : ""}ความพร้อม ${rd.score}/100</span>
       <span class="rp-topbar-sp"></span>
       <button class="btn small${state._rpOpen ? " active-btn" : ""}" id="btnRpSettings"><i data-lucide="settings-2"></i> ตั้งค่ารายงาน${_reportTodos.length ? `<span class="rp-badge">${_reportTodos.length}</span>` : ""}</button>
       <button class="btn small" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกทั้งหมด</button>
@@ -2669,12 +3074,17 @@ function renderReport(panel, rows) {
     <div class="report-scroll anim-slide-r"><div class="paper doc-view"></div></div>`;
   panel.appendChild(layout);
 
-  // การ์ดรายการที่ควรตรวจสอบก่อนใช้เอกสาร (สร้างระหว่าง buildReportBlocks)
+  // การ์ดรายการที่ควรตรวจสอบก่อนใช้เอกสาร (รวมผลตรวจสุขภาพข้อมูล + ความพร้อมรายงาน)
   const todoBox = $("#todoBox", layout);
-  if (_reportTodos.length) {
+  const todoAll = [...new Set([...rd.crit.map((t) => "⛔ " + t), ...rd.warn.map((t) => "⚠️ " + t), ..._reportTodos.map((t) => "• " + t)])];
+  if (todoAll.length) {
     todoBox.className = "rp-card todo-card";
-    todoBox.innerHTML = `<div class="rp-title"><i data-lucide="clipboard-check"></i> ควรตรวจสอบก่อนใช้เอกสาร</div>` +
-      _reportTodos.map((t) => `<p class="todo-item">• ${esc(t)}</p>`).join("");
+    todoBox.innerHTML = `<div class="rp-title"><i data-lucide="clipboard-check"></i> ควรตรวจสอบก่อนใช้เอกสาร (ความพร้อม ${rd.score}/100)</div>` +
+      todoAll.map((t) => `<p class="todo-item">${esc(t)}</p>`).join("");
+  }
+  if (rd.crit.length) {
+    $(".report-scroll", layout).insertAdjacentHTML("afterbegin",
+      `<div class="draft-band">📝 ฉบับร่าง — พบปัญหาสำคัญ ${rd.crit.length} รายการที่ควรแก้ก่อนใช้เอกสารจริง (ดูที่แท็บ "ตรวจข้อมูล" หรือปุ่มตั้งค่ารายงาน)</div>`);
   }
 
   const paper = $(".paper", layout);
@@ -2740,7 +3150,16 @@ function renderReport(panel, rows) {
   $("#ckThai").onchange = (e) => { state.reportOpts.thaiNum = e.target.checked; renderActiveTab(); };
   $("#btnCopyAll").onclick = () => copyHtmlToClipboard(allHtml());
   $("#btnPrint").onclick = () => window.print();
-  $("#btnDoc").onclick = () => downloadDocx(allHtml());
+  $("#btnDoc").onclick = () => {
+    const rd2 = computeReadiness();
+    if (rd2.crit.length) {
+      const okGo = confirm(`พบปัญหาสำคัญ ${rd2.crit.length} รายการ:\n• ${rd2.crit.join("\n• ")}\n\nกด "ตกลง" เพื่อดาวน์โหลดเป็นฉบับร่าง (มีข้อความกำกับในเอกสาร)\nกด "ยกเลิก" เพื่อกลับไปแก้ก่อน`);
+      if (!okGo) return;
+      downloadDocx(`<p style="${W_P}text-align:center;color:#b00020;font-weight:bold;">— รายงานฉบับร่าง: ยังไม่ผ่านการตรวจสอบข้อมูลและการจำแนกคำถามครบถ้วน —</p>` + allHtml());
+      return;
+    }
+    downloadDocx(allHtml());
+  };
 }
 
 /* ============================================================
@@ -2866,6 +3285,11 @@ async function openSession(id) {
   state._preMerge = null;
   state.sessionId = s.id;
   if (s.reportOpts) state.reportOpts = { ...state.reportOpts, ...s.reportOpts };
+  state.roleMap = s.roleMap || {};
+  state.valueMap = s.valueMap || {};
+  state.cleanLog = s.cleanLog || [];
+  state.mapConfirmed = !!s.mapConfirmed;
+  state.fuzzyDismissed = s.fuzzyDismissed || [];
   state.reportExtraIds = new Set();
   bumpDataVersion();
 
