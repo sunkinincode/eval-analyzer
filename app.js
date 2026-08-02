@@ -135,7 +135,7 @@ function mergeRecordIntoCurrent(rec) {
   const baseRowCount = state._preMerge?.rows.length ?? state.rows.length;
   const looksSame = rec.fileName === state.fileName ||
     (JSON.stringify(rec.headers.filter((h) => h !== "ชุดแบบประเมิน")) === JSON.stringify(baseHeaders) && rec.rows.length === baseRowCount);
-  if (looksSame && !confirm(`⚠️ "${rec.fileName}" ดูเหมือนเป็นข้อมูลชุดเดียวกับไฟล์ปัจจุบัน
+  if (looksSame && !confirm(`คำเตือน: "${rec.fileName}" ดูเหมือนเป็นข้อมูลชุดเดียวกับไฟล์ปัจจุบัน
 ผนวกแล้วผู้ตอบจะถูกนับซ้ำเป็นสองเท่า (เช่น 74 กลาย 148)
 
 ยืนยันว่าต้องการผนวกจริง ๆ หรือไม่?`)) {
@@ -1070,10 +1070,16 @@ function shortLabel(s, maxPx = LABEL_PX) {
   return s.slice(0, lo) + "…";
 }
 
+/** งบพิกเซลของป้ายแกน Y แปรตามความกว้างกราฟจริง — จอกว้างป้ายยาวขึ้น ไม่โดนตัดสั้นเกินจำเป็น */
+function dynLabelPx(chart) {
+  const w = chart?.width || 700;
+  return Math.max(LABEL_PX, Math.min(w * 0.4, 360));
+}
+
 /** บังคับความกว้างขั้นต่ำของแกน Y ให้ครอบคลุมงบป้าย — กันการวัดที่คลาดของบางเครื่อง */
 function yAxisFloor(scale) {
   if (scale.axis === "y") {
-    scale.width = Math.max(scale.width, Math.min(scale.chart.width * 0.48, LABEL_PX + 22));
+    scale.width = Math.max(scale.width, Math.min(scale.chart.width * 0.5, dynLabelPx(scale.chart) + 24));
   }
 }
 
@@ -1132,7 +1138,7 @@ function cfgMeanBar(labels, means, t, title, opts = {}) {
   return {
     type: "bar",
     data: {
-      labels: labels.map((l) => shortLabel(l)),
+      labels,
       datasets: [{
         data: means,
         backgroundColor: t.series,
@@ -1157,7 +1163,7 @@ function cfgMeanBar(labels, means, t, title, opts = {}) {
       },
       scales: {
         x: { min: 0, max: 5, grid: { color: t.grid }, border: { color: t.axis }, ticks: { stepSize: 1, color: t.muted, font: { family: FONT_STACK, size: 11 } } },
-        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
       },
     },
     plugins: [endLabelPlugin, passLinePlugin],
@@ -1222,7 +1228,7 @@ function cfgLikert(items, t, title) {
   }));
   return {
     type: "bar",
-    data: { labels: items.map((it) => shortLabel(it.label)), datasets },
+    data: { labels: items.map((it) => it.label), datasets },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
@@ -1237,7 +1243,7 @@ function cfgLikert(items, t, title) {
       },
       scales: {
         x: { stacked: true, min: 0, max: 100, grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, callback: (v) => v + "%", font: { family: FONT_STACK, size: 11 } } },
-        y: { stacked: true, afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { stacked: true, afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
       },
     },
   };
@@ -1248,7 +1254,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
   return {
     type: "bar",
     data: {
-      labels: labels.map((l) => shortLabel(l)),
+      labels,
       datasets: [{
         data: values, backgroundColor: t.series,
         borderRadius: 4, borderSkipped: "start", barThickness: 18, maxBarThickness: 20,
@@ -1274,7 +1280,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
       },
       scales: {
         x: { min: 0, ...(max ? { max } : {}), grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, font: { family: FONT_STACK, size: 11 }, precision: 0, callback: (v) => v + suffix } },
-        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
+        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
       },
     },
     plugins: [endLabelPlugin],
@@ -1367,15 +1373,15 @@ function goHome() {
 }
 
 function switchTab(name) {
-  // ยังไม่มีข้อมูล + อยู่หน้าแรก → คลิกแท็บให้กลับหน้าแรก (ไม่เข้าพื้นที่ว่าง)
-  if ((!state.rows || !state.rows.length) && !$("#emptyState").classList.contains("hidden")) { goHome(); return; }
+  const noData = !state.rows || !state.rows.length;
+  // ยังไม่มีข้อมูล: เปิดได้เฉพาะคู่มือ — แท็บอื่นพากลับหน้าแรก
+  if (noData && name !== "guide") { goHome(); return; }
   state.activeTab = name;
   state._justSwitched = true;
-  // มีข้อมูลแล้วแต่กำลังดูหน้าแรกอยู่ → กลับเข้าพื้นที่วิเคราะห์
   if (!$("#emptyState").classList.contains("hidden")) {
     $("#emptyState").classList.add("hidden");
     $("#workspace").classList.remove("hidden");
-    $("#fileInfo").classList.remove("hidden");
+    if (!noData) $("#fileInfo").classList.remove("hidden");
   }
   $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== "panel-" + name));
@@ -1391,7 +1397,7 @@ function renderActiveTab() {
   const render = {
     dashboard: renderDashboard, sections: renderSections, sdg: renderSdg,
     demo: renderDemographics, text: renderTexts, columns: renderColumns,
-    health: renderHealth, report: renderReport, history: renderHistory,
+    health: renderHealth, report: renderReport, history: renderHistory, guide: renderGuide,
   }[state.activeTab];
   render(panel, rows);
   panel.classList.remove("anim-page");
@@ -2115,7 +2121,7 @@ function renderHealth(panel) {
       <div class="hlth-tile hlth-${h.level}"><b>${lvLabel[h.level]}</b><span>สถานะข้อมูล</span></div>
       <div class="hlth-tile hlth-${rd.level}"><b>${rd.score}/100</b><span>ความพร้อมรายงาน</span></div>
     </div>
-    ${h.issues.length ? h.issues.map((x) => `<p class="hl-issue hl-${x.lv}">${x.lv === "crit" ? "⛔" : x.lv === "warn" ? "⚠️" : "ℹ️"} ${x.msg}</p>`).join("") : `<p class="hl-issue hl-pass">✅ ไม่พบปัญหาโครงสร้างข้อมูล</p>`}`);
+    ${h.issues.length ? h.issues.map((x) => `<p class="hl-issue hl-${x.lv}">${issueIcon(x.lv)} ${x.msg}</p>`).join("") : `<p class="hl-issue hl-pass">${issueIcon("pass")} ไม่พบปัญหาโครงสร้างข้อมูล</p>`}`);
 
   // แถวซ้ำ
   if (h.dupRowIdx.length || state.cleanLog.some((x) => x.t === "dedup")) {
@@ -2132,7 +2138,7 @@ function renderHealth(panel) {
       };
     }
     state.cleanLog.filter((x) => x.t === "dedup").forEach((x) => {
-      c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info">✂️ ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
+      c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="scissors"></i> ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
     });
   }
 
@@ -2172,7 +2178,7 @@ function renderHealth(panel) {
       }));
     }
     state.cleanLog.filter((x) => x.t === "merge").forEach((x) => {
-      c3.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info">🔀 รวม "${esc(x.from)}" → "${esc(x.to)}" ในคอลัมน์ ${esc(String(x.col).slice(0, 30))}</p>`);
+      c3.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="git-merge"></i> รวม "${esc(x.from)}" → "${esc(x.to)}" ในคอลัมน์ ${esc(String(x.col).slice(0, 30))}</p>`);
     });
   }
 
@@ -2221,12 +2227,118 @@ function mappingConfirmCard(panel) {
   const card = document.createElement("div");
   card.className = "card mapping-confirm " + (state.mapConfirmed ? "ok" : lc.length ? "warn" : "ok");
   card.innerHTML = state.mapConfirmed
-    ? `<p class="hl-issue hl-pass" style="margin:0">✅ การจำแนกชนิดคำถามได้รับการยืนยันแล้ว — แก้ชนิดคอลัมน์เมื่อใด สถานะจะกลับเป็นรอยืนยัน</p>`
-    : `<p class="hl-issue ${lc.length ? "hl-warn" : "hl-info"}" style="margin:0 0 8px">${lc.length ? `⚠️ ระบบไม่มั่นใจการจำแนก ${lc.length} คอลัมน์ (ความมั่นใจต่ำกว่า 80% — ไฮไลต์ในตาราง)` : "ℹ️ ตรวจการจำแนกชนิดคำถามด้านล่าง"} แล้วกดยืนยันเพื่อให้รายงานพ้นสถานะฉบับร่าง</p>
+    ? `<p class="hl-issue hl-pass" style="margin:0">${issueIcon("pass")} การจำแนกชนิดคำถามได้รับการยืนยันแล้ว — แก้ชนิดคอลัมน์เมื่อใด สถานะจะกลับเป็นรอยืนยัน</p>`
+    : `<p class="hl-issue ${lc.length ? "hl-warn" : "hl-info"}" style="margin:0 0 8px">${lc.length ? `${issueIcon("warn")} ระบบไม่มั่นใจการจำแนก ${lc.length} คอลัมน์ (ความมั่นใจต่ำกว่า 80% — ไฮไลต์ในตาราง)` : `${issueIcon("info")} ตรวจการจำแนกชนิดคำถามด้านล่าง`} แล้วกดยืนยันเพื่อให้รายงานพ้นสถานะฉบับร่าง</p>
       <button class="btn small primary" id="btnConfirmMap"><i data-lucide="check-check"></i> ตรวจแล้ว — ยืนยันการจำแนกทั้งหมด</button>`;
   panel.appendChild(card);
   const btn = $("#btnConfirmMap", card);
   if (btn) btn.onclick = () => { state.mapConfirmed = true; saveSessionSnapshot(); renderActiveTab(); toast("ยืนยันการจำแนกคำถามแล้ว"); };
+}
+
+/* ============================================================
+   แท็บ: คู่มือการใช้งาน — วิธีใช้ + วิธีคิดของระบบ (เปิดได้แม้ยังไม่โหลดไฟล์)
+   ============================================================ */
+function renderGuide(panel) {
+  const wrap = document.createElement("div");
+  wrap.className = "guide-wrap";
+  const sec = (icon, title, body, open = false) => `
+    <details class="g-sec"${open ? " open" : ""}>
+      <summary><i data-lucide="${icon}"></i> ${title}</summary>
+      <div class="g-body">${body}</div>
+    </details>`;
+
+  wrap.innerHTML = `
+    <div class="card guide-head">
+      <h3><i data-lucide="book-open"></i> คู่มือการใช้งาน</h3>
+      <p class="card-sub">อธิบายทั้ง "วิธีใช้" และ "วิธีคิด" ของระบบ — ระบบวิเคราะห์อะไร คำนวณอย่างไร และผลแต่ละส่วนอ่านอย่างไร เพื่อให้ตรวจสอบและอ้างอิงได้ทุกตัวเลข</p>
+    </div>
+
+    ${sec("rocket", "เริ่มต้นใช้งาน — 5 ขั้นตอนแนะนำ", `
+      <div class="g-step"><span class="g-num">1</span><div><b>อัปโหลดไฟล์</b> — ลากไฟล์ .xlsx / .csv จาก Google Forms หรือไฟล์ที่พิมพ์จากแบบกระดาษมาวาง (รองรับหัวตาราง 2 ชั้น) หรือเชื่อม Google Sheet เพื่อซิงก์ค่าล่าสุด หรือเปิดไฟล์ตรวจงาน .evalproj ที่เพื่อนส่งมา</div></div>
+      <div class="g-step"><span class="g-num">2</span><div><b>แท็บ "ตรวจข้อมูล"</b> — ดูสุขภาพข้อมูลก่อน: แถวซ้ำ ตัวเลือกสะกดคล้ายกัน ค่าว่าง คะแนนนอกช่วง ระบบจะ<b>เสนอ</b>สิ่งที่ควรแก้ แต่ไม่แก้เองจนกว่าจะกดยืนยัน และทุกการแก้ถูกบันทึกลงรายงานส่วน "การจัดการข้อมูล"</div></div>
+      <div class="g-step"><span class="g-num">3</span><div><b>แท็บ "ตั้งค่าคอลัมน์"</b> — ตรวจว่าระบบจำแนกชนิดคำถามถูกไหม (มี % ความมั่นใจกำกับ) แก้ได้ทุกคอลัมน์ แล้วกด "ยืนยันการจำแนกทั้งหมด" พร้อมระบุกลุ่มผู้ตอบ (ใครคือผู้เข้าร่วม ใครคือผู้จัด) และคำเรียกที่จะใช้ในรายงาน</div></div>
+      <div class="g-step"><span class="g-num">4</span><div><b>แท็บ "รายงานราชการ" → ปุ่มตั้งค่ารายงาน</b> — กรอกชื่อโครงการ เกณฑ์ความสำเร็จ และวัตถุประสงค์ (บรรทัดละข้อ ตามรูปแบบ <code>วัตถุประสงค์ | ชื่อด้านที่ใช้วัด</code>) ระบบจะสรุปการบรรลุวัตถุประสงค์ให้เฉพาะเมื่อเชื่อมด้านแล้วเท่านั้น</div></div>
+      <div class="g-step"><span class="g-num">5</span><div><b>คัดลอก / ดาวน์โหลด .docx</b> — ตัวอย่างบนจอจัดรูปแบบให้อ่านง่าย แต่สิ่งที่คัดลอกหรือดาวน์โหลดจะเป็นฟอร์แมตราชการ (TH Sarabun 16pt) พร้อมวางในเล่มทันที ถ้ายังมีปัญหาสำคัญค้าง เอกสารจะติดสถานะ "ฉบับร่าง"</div></div>
+    `, true)}
+
+    ${sec("layout-dashboard", "แต่ละแท็บทำหน้าที่อะไร", `
+      <div class="tbl-wrap"><table class="app">
+        <tr><th class="item">แท็บ</th><th class="item">หน้าที่</th></tr>
+        <tr><td class="item"><b>แดชบอร์ด</b></td><td class="item">ภาพรวมทันที: จำนวนผู้ตอบ อัตราตอบกลับ ค่าเฉลี่ยรายด้าน และการกระจายคะแนน</td></tr>
+        <tr><td class="item"><b>ผลรายด้าน</b></td><td class="item">เจาะรายด้าน→รายข้อ พร้อมกราฟค่าเฉลี่ยและการกระจาย (สลับมุมมองความถี่ได้)</td></tr>
+        <tr><td class="item"><b>SDGs</b></td><td class="item">ร้อยละผู้ที่เห็นว่าโครงการสอดคล้องแต่ละเป้าหมาย (เกณฑ์สอดคล้อง ≥ 50%)</td></tr>
+        <tr><td class="item"><b>ข้อมูลผู้ตอบ</b></td><td class="item">โครงสร้างผู้ตอบ: สถานะ ชั้นปี สังกัด ฯลฯ เป็นความถี่และร้อยละ</td></tr>
+        <tr><td class="item"><b>ข้อเสนอแนะ</b></td><td class="item">ความคิดเห็นปลายเปิดฉบับเต็ม จัดกลุ่มคำตอบซ้ำให้อัตโนมัติ</td></tr>
+        <tr><td class="item"><b>ตรวจข้อมูล</b></td><td class="item">สุขภาพข้อมูล + รายการที่ควรแก้ + คะแนนความพร้อมของรายงาน</td></tr>
+        <tr><td class="item"><b>ตั้งค่าคอลัมน์</b></td><td class="item">แก้ชนิดคำถาม จัดด้าน รวมคอลัมน์ กำหนดกลุ่มผู้ตอบ เลือกว่าอะไรลงรายงาน</td></tr>
+        <tr><td class="item"><b>รายงานราชการ</b></td><td class="item">เล่มรายงาน 8 ส่วน + ภาคผนวก พร้อมคัดลอก/ดาวน์โหลด .docx</td></tr>
+        <tr><td class="item"><b>ประวัติ</b></td><td class="item">งานที่เคยวิเคราะห์บนเครื่องนี้ (เก็บ 15 วันแล้วลบอัตโนมัติ) เปิดซ้ำ/ผนวก/รวมเล่มได้</td></tr>
+      </table></div>
+    `)}
+
+    ${sec("bot", "ระบบจำแนกชนิดคำถามอย่างไร (และทำไมต้องยืนยัน)", `
+      <p>ระบบอ่านทั้ง<b>หัวคอลัมน์และคำตอบจริง</b>ของแต่ละคอลัมน์ แล้วเดาชนิดตามกติกา:</p>
+      <p><b>คะแนน 1–5</b> — คำตอบอย่างน้อย 90% แปลงเป็นคะแนนได้ (ตัวเลข 1–5 หรือคำอย่าง "มากที่สุด/มาก/ปานกลาง") · <b>SDG</b> — คำตอบทุกค่าเป็น "สอดคล้อง/ไม่สอดคล้อง" · <b>ตัวเลือก</b> — ค่าที่ไม่ซ้ำมีไม่เกิน ~20 แบบ · <b>คำถามหมวดหมู่</b> — หัวข้อดูเหมือนคำถามความเห็น (เช่น "ฐานกิจกรรมที่ประทับใจมากที่สุด") แต่คำตอบกระจุกเป็นตัวเลือกซ้ำ ๆ → วิเคราะห์เป็นความถี่/ร้อยละ ไม่ใช่การตีความข้อความ · <b>ปลายเปิด</b> — ข้อความอิสระ · <b>ไม่วิเคราะห์</b> — ประทับเวลา อีเมล ชื่อ เลขลำดับ</p>
+      <p>ทุกคอลัมน์มี <b>% ความมั่นใจ</b> กำกับ ถ้าต่ำกว่า 80% ระบบถือว่า "ต้องตรวจ" และรายงานจะติดสถานะฉบับร่างจนกว่าจะกด<b>ยืนยันการจำแนกทั้งหมด</b> — เหตุผลคือการเดาผิดชนิดเพียงคอลัมน์เดียว (เช่น เอาคำถามหมวดหมู่ไปตีความเป็นความเรียง) ทำให้ผลทั้งเล่มผิดความหมายได้แม้ตัวเลขจะคำนวณถูก</p>
+    `)}
+
+    ${sec("sigma", "สถิติที่ใช้และสูตรคำนวณ", `
+      <div class="g-formula"><b>ค่าเฉลี่ย</b> x̄ = ผลรวมของคะแนนทุกคำตอบ ÷ จำนวนคำตอบ (n)</div>
+      <div class="g-formula"><b>ส่วนเบี่ยงเบนมาตรฐาน</b> S.D. = √( Σ(x − x̄)² ÷ (n − 1) ) — ใช้สูตรกลุ่มตัวอย่าง (n−1) ค่ายิ่งต่ำ = คำตอบยิ่งไปทางเดียวกัน</div>
+      <div class="g-formula"><b>ร้อยละ</b> = (จำนวนในกลุ่ม ÷ จำนวนผู้ตอบข้อนั้น) × 100</div>
+      <p><b>ค่าเฉลี่ยรายด้าน</b> คำนวณจากคะแนนดิบทุกคำตอบของทุกข้อในด้านนั้นรวมกัน (pooled) ไม่ใช่เฉลี่ยของค่าเฉลี่ยรายข้อ ส่วน<b>ค่าเฉลี่ยของผลการประเมินรายด้าน</b>ที่ปรากฏท้ายตารางบทสรุป คำนวณจากค่าเฉลี่ยรายด้านแบบไม่ถ่วงน้ำหนัก และมีหมายเหตุกำกับว่าใช้เพื่อภาพรวมเชิงพรรณนาเท่านั้น</p>
+      <p><b>ข้อที่ไม่มีคำตอบ (missing)</b> ใช้วิธี available-case: คำนวณจากผู้ที่ตอบข้อนั้นจริง ระบุ n กำกับ และ<b>ไม่แทนค่าว่างด้วยศูนย์</b>เด็ดขาด</p>
+      <div class="tbl-wrap"><table class="app">
+        <tr><th>ช่วงค่าเฉลี่ย</th><th class="item">ระดับผลการประเมิน</th></tr>
+        <tr><td class="num">4.51 – 5.00</td><td class="item">มากที่สุด</td></tr>
+        <tr><td class="num">3.51 – 4.50</td><td class="item">มาก</td></tr>
+        <tr><td class="num">2.51 – 3.50</td><td class="item">ปานกลาง</td></tr>
+        <tr><td class="num">1.51 – 2.50</td><td class="item">น้อย</td></tr>
+        <tr><td class="num">1.00 – 1.50</td><td class="item">ควรปรับปรุง</td></tr>
+      </table></div>
+      <p><b>เกณฑ์ความสำเร็จ</b> (ผ่าน/ไม่ผ่าน) ค่าเริ่มต้นคือค่าเฉลี่ยตั้งแต่ 3.51 ขึ้นไป ปรับได้ในตั้งค่ารายงาน — ผลจะอัปเดตทั้งเล่มทันที</p>
+    `)}
+
+    ${sec("users", "ฐานผู้ประเมินคืออะไร — ทำไมบางด้านแยกรายงาน", `
+      <p><b>ฐานผู้ประเมิน (Cohort)</b> คือกลุ่มผู้ตอบที่ใช้วิเคราะห์ผลชุดเดียวกัน เช่น แบบประเมินมาตรฐานกลางมักให้<b>ผู้เข้าร่วมทุกคน</b>ตอบด้านความสัมพันธ์/ความพึงพอใจ (เช่น n = 864) แต่ให้<b>เฉพาะผู้จัดและบุคลากร</b>ตอบด้านทักษะแห่งอนาคต 5Hs (เช่น n = 55)</p>
+      <p>ระบบตรวจจากข้อมูลจริงว่าใครตอบด้านไหน (นับรายแถว ไม่ใช้ตัวเลขที่พิมพ์เอง) ประกอบกับบทบาทที่ระบุในแท็บตั้งค่าคอลัมน์ แล้ว<b>แยกรายงานคนละส่วน ห้ามเฉลี่ยรวม ห้ามอยู่กราฟเดียวกัน และห้ามจัดอันดับข้ามฐาน</b> — เพราะคะแนนจากคน 55 คนกับ 864 คนเทียบกันตรง ๆ ไม่ได้ ทุกตารางจึงมีบรรทัด "ฐานผู้ประเมิน" ระบุว่าใครตอบ กี่คน</p>
+      <p>กลุ่มที่มีผู้ตอบน้อยมาก (เช่น อาจารย์ 1 คน) ระบบจะเตือนอัตโนมัติในรายงานว่าไม่ควรตีความเป็นตัวแทนของทั้งกลุ่ม</p>
+    `)}
+
+    ${sec("message-square", "ความคิดเห็นปลายเปิดถูกวิเคราะห์อย่างไร", `
+      <div class="g-step"><span class="g-num">1</span><div><b>คัดกรอง</b> — ตัดคำตอบที่ไม่มีสาระ ("ไม่มี", "-", "ดี", "โอเค") พร้อมรายงานจำนวนที่ตัดอย่างโปร่งใส แต่ไม่ตัดความคิดเห็นเชิงลบที่มีสาระ</div></div>
+      <div class="g-step"><span class="g-num">2</span><div><b>จำแนกขั้ว</b> — ดูจากคอลัมน์ (คำถาม "ประทับใจ" → เชิงชื่นชอบ, "ข้อเสนอแนะ/ปรับปรุง" → เชิงพัฒนา) และคำบ่งชี้ในข้อความ เช่น "ควร/อยากให้/เพิ่ม/ลด"</div></div>
+      <div class="g-step"><span class="g-num">3</span><div><b>จัดประเด็น (Theme)</b> — จับคู่คำสำคัญภาษาไทยกับประเด็นมาตรฐาน เช่น การบริหารเวลา อาหารและช่วงพัก สถานที่ การสื่อสาร ระดับเสียง คิว/การเดินทาง เอกสาร ฯลฯ ความคิดเห็นหนึ่งข้อความนับได้หลายประเด็นถ้าพูดถึงหลายเรื่อง ที่จับไม่ได้จะรวมเป็น "อื่น ๆ" ไม่ทิ้งเงียบ</div></div>
+      <div class="g-step"><span class="g-num">4</span><div><b>เลือกตัวแทน</b> — ประเด็นละไม่เกิน 2 ข้อความ: ข้อความที่ถูกพูดซ้ำมากที่สุด และข้อความที่ยาวพอมีรายละเอียด โดยคงคำเดิมของผู้ตอบ</div></div>
+      <p>ผลไปปรากฏในรายงานเป็นตาราง Theme × จำนวน พร้อมย่อหน้าเชื่อมกับผลคะแนน และแปลงเป็น<b>ข้อเสนอแนะเชิงปฏิบัติ</b> (ประเด็น–หลักฐาน–แนวทาง–ผู้รับผิดชอบ–ช่วงเวลา) ความคิดเห็นดิบทั้งหมดเก็บอยู่ภาคผนวก</p>
+    `)}
+
+    ${sec("globe", "SDGs อ่านอย่างไร", `
+      <p>ระบบนับร้อยละของผู้ตอบที่เห็นว่าโครงการ "สอดคล้อง" กับแต่ละเป้าหมาย และถือว่าสอดคล้องเมื่อ<b>ตั้งแต่ร้อยละ 50 ขึ้นไป</b> — สำคัญ: นี่คือ<b>การรับรู้ของผู้ตอบแบบประเมิน</b> ไม่ใช่การประเมินผลกระทบตามตัวชี้วัด SDGs อย่างเป็นทางการ รายงานจึงมีหมายเหตุนี้กำกับเสมอ</p>
+    `)}
+
+    ${sec("file-text", "โครงเล่มรายงานราชการ — ใครควรอ่านส่วนไหน", `
+      <p><b>ส่วนที่ 1 วิธีการประเมิน</b> เครื่องมือ/กลุ่มผู้ตอบ/สถิติ/การจัดการข้อมูล/ข้อจำกัด · <b>ส่วนที่ 2 บทสรุปผู้บริหาร</b> อ่านหน้าเดียวรู้เรื่อง: ช่วงคะแนน จุดแข็ง ประเด็นพัฒนา และข้อสรุป · <b>ส่วนถัดไป</b> ผลรายฐานผู้ประเมิน (ผู้เข้าร่วม → ผู้จัด) / การบรรลุวัตถุประสงค์ / SDGs / คำถามเชิงหมวดหมู่ / วิเคราะห์ความคิดเห็น / ข้อเสนอแนะเพื่อการพัฒนา · <b>ภาคผนวก</b> ตารางรายข้อทุกด้าน ข้อมูลผู้ตอบละเอียด ความคิดเห็นฉบับเต็ม</p>
+      <p>กราฟในเนื้อหาหลักมีไม่เกิน 2 ภาพ (ค่าเฉลี่ยรายด้านของฐานหลักพร้อมเส้นเกณฑ์ และจำนวนความคิดเห็นตามประเด็น) ตารางรายข้อจำนวนมากถูกย้ายไปภาคผนวกเพื่อให้เนื้อหาหลักอ่านต่อเนื่อง</p>
+      <p><b>จอ vs ไฟล์:</b> ตัวอย่างบนจอใช้ฟอนต์อ่านสบาย แต่เมื่อคัดลอกหรือดาวน์โหลด .docx จะได้ TH Sarabun 16pt เลขอารบิก ตามแบบเอกสารราชการโดยอัตโนมัติ (สลับเลขไทยได้)</p>
+    `)}
+
+    ${sec("gauge", "คะแนนความพร้อมรายงาน และสถานะฉบับร่าง", `
+      <p>ระบบตรวจความพร้อมก่อนใช้เอกสารเป็นคะแนนเต็ม 100 หักตามปัญหาที่พบ: <b>ปัญหาสำคัญ (สีแดง) −25</b> เช่น คะแนนนอกช่วง หัวคอลัมน์ซ้ำ ยังไม่ยืนยันการจำแนกคำถามที่ระบบไม่มั่นใจ · <b>ข้อควรระวัง (สีส้ม) −6</b> เช่น แถวซ้ำที่ยังไม่จัดการ ตัวเลือกสะกดคล้าย ยังไม่กรอกวัตถุประสงค์ กลุ่ม n น้อย · <b>ข้อสังเกต −1</b></p>
+      <p>ถ้ายังมีปัญหาสำคัญค้าง ตัวอย่างเอกสารจะติดแถบ "ฉบับร่าง" และการดาวน์โหลด .docx จะถามยืนยันพร้อมฝังบรรทัดกำกับในเอกสาร — แก้ครบเมื่อไหร่ ดาวน์โหลดได้เอกสารสะอาดทันที รายการที่ต้องแก้ดูได้ที่แท็บ "ตรวจข้อมูล" หรือปุ่มตั้งค่ารายงาน</p>
+    `)}
+
+    ${sec("layers", "รวมหลายแบบประเมิน / หลายไฟล์", `
+      <p><b>ผนวก (ปุ่มบนหัวไฟล์)</b> — รวมข้อมูลอีกชุดเข้ากับชุดปัจจุบันให้วิเคราะห์ด้วยกันทุกแท็บ เหมาะกับแบบประเมินเดียวกันที่แยกเก็บหลายไฟล์ ระบบกันการผนวกซ้ำและถอนคืนได้</p>
+      <p><b>รวมหลายแบบประเมิน (ในตั้งค่ารายงาน)</b> — ต่อแบบประเมินคนละชุดเป็นเล่มเดียว เลขตาราง/แผนภูมิเรียงต่อกัน เหมาะกับโครงการที่ใช้แบบประเมินมากกว่า 1 ฉบับแต่ต้องส่งเล่มสรุปเดียว</p>
+    `)}
+
+    ${sec("lock", "ข้อมูลไปอยู่ที่ไหน (PDPA)", `
+      <p>ทุกอย่างประมวลผล<b>ในเบราว์เซอร์ของเครื่องนี้เท่านั้น</b> ไฟล์ประเมินไม่ถูกอัปโหลดขึ้นเซิร์ฟเวอร์ใด ๆ · ประวัติเก็บใน IndexedDB ของเครื่องและลบอัตโนมัติเมื่อครบ 15 วัน (ลบเองได้ทุกเมื่อ) · ไฟล์ .evalproj ส่งถึงกันเอง (LINE/อีเมล) ไม่ผ่านตัวกลาง · การเชื่อม Google Sheet ข้อมูลวิ่งตรงระหว่างเบราว์เซอร์กับ Google ตามสิทธิ์ที่ล็อกอิน · ควรลบคอลัมน์ชื่อ–สกุล อีเมล เบอร์โทร ออกจากไฟล์ก่อนแชร์ต่อ (ระบบตั้งค่าไม่วิเคราะห์คอลัมน์เหล่านี้ให้อยู่แล้ว)</p>
+    `)}
+  `;
+  panel.appendChild(wrap);
+  refreshIcons();
 }
 
 /* ============================================================
@@ -2239,6 +2351,8 @@ function mappingConfirmCard(panel) {
 /* รายการที่ควรตรวจก่อนใช้เอกสาร — เก็บระหว่างสร้างรายงาน แสดงในแผงตั้งค่า (ไม่ลงในเอกสาร) */
 let _reportTodos = [];
 const addTodo = (t) => { if (!_reportTodos.includes(t)) _reportTodos.push(t); };
+/* ไอคอนระดับปัญหา — ใช้แทนอีโมจิให้เข้าธีมเดียวกับส่วนอื่น */
+const issueIcon = (lv) => `<i data-lucide="${lv === "crit" ? "x-circle" : lv === "warn" ? "alert-triangle" : lv === "pass" ? "check-circle" : "info"}"></i>`;
 
 function joinThai(arr) {
   if (arr.length <= 1) return arr.join("");
@@ -3076,15 +3190,17 @@ function renderReport(panel, rows) {
 
   // การ์ดรายการที่ควรตรวจสอบก่อนใช้เอกสาร (รวมผลตรวจสุขภาพข้อมูล + ความพร้อมรายงาน)
   const todoBox = $("#todoBox", layout);
-  const todoAll = [...new Set([...rd.crit.map((t) => "⛔ " + t), ...rd.warn.map((t) => "⚠️ " + t), ..._reportTodos.map((t) => "• " + t)])];
+  const seenTodo = new Set();
+  const todoAll = [...rd.crit.map((t) => ({ lv: "crit", t })), ...rd.warn.map((t) => ({ lv: "warn", t })), ..._reportTodos.map((t) => ({ lv: "info", t }))]
+    .filter((x) => !seenTodo.has(x.t) && seenTodo.add(x.t));
   if (todoAll.length) {
     todoBox.className = "rp-card todo-card";
     todoBox.innerHTML = `<div class="rp-title"><i data-lucide="clipboard-check"></i> ควรตรวจสอบก่อนใช้เอกสาร (ความพร้อม ${rd.score}/100)</div>` +
-      todoAll.map((t) => `<p class="todo-item">${esc(t)}</p>`).join("");
+      todoAll.map((x) => `<p class="todo-item todo-${x.lv}">${issueIcon(x.lv)} ${esc(x.t)}</p>`).join("");
   }
   if (rd.crit.length) {
     $(".report-scroll", layout).insertAdjacentHTML("afterbegin",
-      `<div class="draft-band">📝 ฉบับร่าง — พบปัญหาสำคัญ ${rd.crit.length} รายการที่ควรแก้ก่อนใช้เอกสารจริง (ดูที่แท็บ "ตรวจข้อมูล" หรือปุ่มตั้งค่ารายงาน)</div>`);
+      `<div class="draft-band"><i data-lucide="file-warning"></i> ฉบับร่าง — พบปัญหาสำคัญ ${rd.crit.length} รายการที่ควรแก้ก่อนใช้เอกสารจริง (ดูที่แท็บ "ตรวจข้อมูล" หรือปุ่มตั้งค่ารายงาน)</div>`);
   }
 
   const paper = $(".paper", layout);
@@ -3503,6 +3619,7 @@ function init() {
     if (f && /\.(xlsx|xls|csv)$/i.test(f.name)) handleFile(f);
   });
 
+  $("#btnGuideHome").onclick = () => switchTab("guide");
   $("#btnDemo").onclick = async (e) => {
     e.stopPropagation();
     try {

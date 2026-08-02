@@ -901,3 +901,54 @@ tr.row-lowconf td { background: color-mix(in srgb, #e08b1e 6%, transparent); }
   border: 1px dashed color-mix(in srgb, #e08b1e 55%, transparent);
   font-size: 13px; font-weight: 600;
 }
+
+/* ---------- ไอคอนระดับปัญหา (แทนอีโมจิ) ---------- */
+.hl-issue svg.lucide, .todo-item svg.lucide, .draft-band svg.lucide {
+  width: 14px; height: 14px; vertical-align: -2.5px; margin-right: 5px; flex-shrink: 0;
+}
+.hl-crit svg.lucide, .todo-crit svg.lucide { color: #d64545; }
+.hl-warn svg.lucide, .todo-warn svg.lucide { color: #e08b1e; }
+.hl-pass svg.lucide { color: #2e9e5b; }
+.hl-info svg.lucide, .todo-info svg.lucide { color: var(--muted); }
+.draft-band svg.lucide { color: #c07515; width: 15px; height: 15px; }
+
+/* ---------- แท็บคู่มือการใช้งาน ---------- */
+.guide-wrap { max-width: 940px; }
+.guide-head h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.g-sec {
+  margin-top: var(--gap);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border: 1px solid var(--glass-border); border-radius: var(--r);
+  box-shadow: var(--shadow-card), inset 0 1px 0 var(--glass-hi);
+  overflow: hidden;
+}
+.g-sec summary {
+  cursor: pointer; list-style: none; user-select: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 15px 18px; font-weight: 700; font-size: 14.5px;
+}
+.g-sec summary::-webkit-details-marker { display: none; }
+.g-sec summary::after { content: "+"; margin-left: auto; font-size: 18px; color: var(--muted); font-weight: 600; }
+.g-sec[open] summary::after { content: "−"; }
+.g-sec summary svg.lucide { width: 17px; height: 17px; color: var(--accent); }
+.g-sec[open] summary { border-bottom: 1px solid var(--border); }
+.g-sec summary:hover { background: var(--accent-soft); }
+.g-body { padding: 14px 20px 18px; font-size: 13.5px; line-height: 1.9; color: var(--text-secondary); }
+.g-body p { margin: 0 0 10px; }
+.g-body b { color: var(--text-primary); }
+.g-body code {
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 1px 8px; border-radius: 7px; font-size: 12.5px; color: var(--text-primary);
+}
+.g-step { display: flex; gap: 12px; margin: 0 0 12px; align-items: flex-start; }
+.g-num {
+  flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-size: 12.5px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; margin-top: 2px;
+}
+.g-formula {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px; margin: 8px 0; font-size: 13px;
+}
