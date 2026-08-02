@@ -1837,17 +1837,17 @@ function wp(text, opts = {}) {
   const align = opts.align ? `text-align:${opts.align};` : "text-align:justify;";
   const indent = opts.indent === false ? "" : "text-indent:36pt;";
   const bold = opts.bold ? "font-weight:bold;" : "";
-  return `<p style="${W_P}${align}${indent}${bold}">${text}</p>`;
+  return `<p${opts.cls ? ` class="${opts.cls}"` : ""} style="${W_P}${align}${indent}${bold}">${text}</p>`;
 }
 function wCaption(no, title) {
-  return `<p style="${W_P}text-align:left;margin-bottom:2pt;"><b>ตารางที่ ${no}</b>&nbsp;&nbsp;${esc(title)}</p>`;
+  return `<p class="rp-cap" style="${W_P}text-align:left;margin-bottom:2pt;"><b>ตารางที่ ${no}</b>&nbsp;&nbsp;${esc(title)}</p>`;
 }
 function wTable(headCells, bodyRows) {
   const th = headCells.map((h) => `<td style="${W_TD}text-align:center;font-weight:bold;">${h}</td>`).join("");
   const trs = bodyRows.map((cells) =>
     `<tr>${cells.map((c) => `<td ${c.span ? `colspan="${c.span}" ` : ""}style="${W_TD}${c.align ? `text-align:${c.align};` : "text-align:center;"}${c.bold ? "font-weight:bold;" : ""}">${c.html}</td>`).join("")}</tr>`
   ).join("");
-  return `<table style="border-collapse:collapse;width:100%;${W_FONT}" border="1"><tr>${th}</tr>${trs}</table>`;
+  return `<table class="rp-tbl" style="border-collapse:collapse;width:100%;${W_FONT}" border="1"><tr>${th}</tr>${trs}</table>`;
 }
 const cell = (html, align, bold, span) => ({ html, align, bold, span });
 
@@ -2055,20 +2055,20 @@ function codeComments(rows, columns) {
 /* ---------- ตัวช่วยประกอบเอกสาร ---------- */
 
 function wAppCaption(no, title) {
-  return `<p style="${W_P}text-align:left;margin-bottom:2pt;"><b>ตารางผนวกที่ ${no}</b>&nbsp;&nbsp;${esc(title)}</p>`;
+  return `<p class="rp-cap" style="${W_P}text-align:left;margin-bottom:2pt;"><b>ตารางผนวกที่ ${no}</b>&nbsp;&nbsp;${esc(title)}</p>`;
 }
 function secHeadHtml(no, title) {
-  return `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin:14pt 0 4pt 0;">ส่วนที่ ${no}  ${esc(title)}</p>`;
+  return `<p class="rp-sec" style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin:14pt 0 4pt 0;">ส่วนที่ ${no}  ${esc(title)}</p>`;
 }
 function subHeadHtml(t) {
-  return wp(`<b>${esc(t)}</b>`, { indent: false, align: "left" });
+  return wp(`<b>${esc(t)}</b>`, { indent: false, align: "left", cls: "rp-sub" });
 }
 function baseLine(whoText) {
-  return `<p style="${W_P}text-align:left;margin:0 0 6pt 0;"><b>ฐานผู้ประเมิน:</b> ${esc(whoText)}</p>`;
+  return `<p class="rp-base" style="${W_P}text-align:left;margin:0 0 6pt 0;"><b>ฐานผู้ประเมิน:</b> ${esc(whoText)}</p>`;
 }
 function chartImg(url, no, caption, appendix = false) {
-  return `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>` +
-    `<p style="${W_P}text-align:center;margin-top:0;"><b>${appendix ? "แผนภูมิผนวกที่" : "แผนภูมิที่"} ${no}</b>&nbsp;&nbsp;${esc(caption)}</p>`;
+  return `<p class="rp-img" style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>` +
+    `<p class="rp-cap rp-chartcap" style="${W_P}text-align:center;margin-top:0;"><b>${appendix ? "แผนภูมิผนวกที่" : "แผนภูมิที่"} ${no}</b>&nbsp;&nbsp;${esc(caption)}</p>`;
 }
 
 /** ตารางรายด้าน (เรียงค่าเฉลี่ยสูง→ต่ำ) + คอลัมน์ผ่านเกณฑ์ */
@@ -2120,7 +2120,7 @@ function buildReportBlocks(rows) {
   blocks.push({
     title: "หัวรายงาน",
     html:
-      `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการประเมิน${esc(projText)}</p>` +
+      `<p class="rp-doc-title" style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการประเมิน${esc(projText)}</p>` +
       wp(`การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วย${multi ? `แบบประเมินจำนวน ${datasets.length} ชุด` : "แบบสอบถาม"} มีผู้ตอบแบบประเมินรวมทั้งสิ้น <b>${totalResp}</b> คน${esc(filterNote)} รายละเอียดวิธีการประเมินปรากฏในส่วนที่ 1 และสรุปผลสำคัญปรากฏในบทสรุปสำหรับผู้บริหาร (ส่วนที่ 2)`),
   });
 
@@ -2137,7 +2137,7 @@ function buildReportBlocks(rows) {
     if (multi) {
       blocks.push({
         title: `แบบประเมินชุดที่ ${di + 1}: ${ds.label}`,
-        html: `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin-top:14pt;">ผลของแบบประเมินชุดที่ ${di + 1}  ${esc(ds.label)}</p>` +
+        html: `<p class="rp-sec" style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin-top:14pt;">ผลของแบบประเมินชุดที่ ${di + 1}  ${esc(ds.label)}</p>` +
           wp(`แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน${ds.respTarget ? ` จากกลุ่มเป้าหมาย ${ds.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((ds.totalAll / ds.respTarget) * 100).toFixed(2)}` : ""}`),
       });
     }
@@ -2158,7 +2158,7 @@ function buildReportBlocks(rows) {
   if (state.reportOpts.appendix && appendix.length) {
     blocks.push({
       title: "ภาคผนวก",
-      html: `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;margin-top:16pt;">ภาคผนวก</p>` +
+      html: `<p class="rp-doc-title" style="${W_P}text-align:center;font-weight:bold;font-size:18pt;margin-top:16pt;">ภาคผนวก</p>` +
         wp("ภาคผนวกรวบรวมรายละเอียดประกอบผลการประเมิน ได้แก่ ตารางผลการประเมินรายข้อ ข้อมูลทั่วไปของผู้ตอบโดยละเอียด และความคิดเห็นปลายเปิดฉบับเต็ม เพื่อใช้อ้างอิงและตรวจสอบ", { indent: false, align: "left" }),
     });
     blocks.push(...appendix);
@@ -2292,7 +2292,7 @@ function execSummaryBlock(datasets, num, pm, multi) {
   });
   trs.push([cell("ค่าเฉลี่ยของผลการประเมินรายด้าน", "center", true), cell(f2(meanOfMeans), "center", true), cell("—", "center", true), cell(levelLabel(meanOfMeans), "center", true), cell(meanOfMeans >= pm ? "ผ่าน" : "ไม่ผ่าน", "center", true)]);
   html += wTable(["ด้านการประเมิน", "x̄", "S.D.", "ระดับผล", "ผลตามเกณฑ์"], trs);
-  html += `<p style="${W_P}text-align:left;margin:2pt 0 0 0;font-size:14pt;color:#333;">หมายเหตุ: ค่าเฉลี่ยของผลการประเมินรายด้านคำนวณจากค่าเฉลี่ยรายด้านโดยไม่ถ่วงน้ำหนัก แต่ละด้านมีจำนวนผู้ตอบแตกต่างกัน จึงใช้เพื่อสรุปภาพรวมเชิงพรรณนาเท่านั้น</p>`;
+  html += `<p class="rp-note" style="${W_P}text-align:left;margin:2pt 0 0 0;font-size:14pt;color:#333;">หมายเหตุ: ค่าเฉลี่ยของผลการประเมินรายด้านคำนวณจากค่าเฉลี่ยรายด้านโดยไม่ถ่วงน้ำหนัก แต่ละด้านมีจำนวนผู้ตอบแตกต่างกัน จึงใช้เพื่อสรุปภาพรวมเชิงพรรณนาเท่านั้น</p>`;
   return { title: `ส่วนที่ ${s} บทสรุปสำหรับผู้บริหาร`, html };
 }
 
@@ -2564,7 +2564,7 @@ function appendixBlocks(ds, num, rk, bases) {
       totalRow.push(cell(f2(g.total.mean), "center", true), cell(f2(g.total.sd), "center", true), cell(levelLabel(g.total.mean), "center", true));
       body.push(totalRow);
       html += wAppCaption(num.appTable, `${g.name}${withFreq ? " (ค่าในวงเล็บคือร้อยละ)" : ""}`);
-      html += `<p style="${W_P}text-align:left;margin:0 0 4pt 0;font-size:14pt;color:#333;">ฐานผู้ประเมิน: ${esc(x.who.text)}</p>`;
+      html += `<p class="rp-note" style="${W_P}text-align:left;margin:0 0 4pt 0;font-size:14pt;color:#333;">ฐานผู้ประเมิน: ${esc(x.who.text)}</p>`;
       html += wTable(head, body);
       if (state.reportOpts.charts && (style === "mean" || style === "both")) {
         num.appChart++;
@@ -2626,9 +2626,18 @@ function renderReport(panel, rows) {
   const chartVal = state.reportOpts.charts ? cs : "none";
 
   const layout = document.createElement("div");
-  layout.className = "report-layout";
+  layout.className = "report-page";
   layout.innerHTML = `
-    <aside class="report-side anim-slide-l">
+    <div class="rp-topbar anim-slide-l">
+      <span class="rp-docname"><i data-lucide="file-text"></i> รายงานผลการประเมิน</span>
+      <span class="rp-pages">${blocks.length} ส่วน</span>
+      <span class="rp-topbar-sp"></span>
+      <button class="btn small${state._rpOpen ? " active-btn" : ""}" id="btnRpSettings"><i data-lucide="settings-2"></i> ตั้งค่ารายงาน${_reportTodos.length ? `<span class="rp-badge">${_reportTodos.length}</span>` : ""}</button>
+      <button class="btn small" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกทั้งหมด</button>
+      <button class="btn small" id="btnPrint"><i data-lucide="printer"></i> พิมพ์</button>
+      <button class="btn small primary" id="btnDoc"><i data-lucide="download"></i> ดาวน์โหลด .docx</button>
+    </div>
+    <div class="rp-drawer${state._rpOpen ? "" : " hidden"}" id="rpDrawer">
       <div class="rp-card">
         <div class="rp-title"><i data-lucide="settings-2"></i> ตั้งค่ารายงาน</div>
         <label class="rp-field"><span>ชื่อโครงการ</span>
@@ -2651,23 +2660,13 @@ function renderReport(panel, rows) {
           <label class="rp-switch"><input type="checkbox" id="ckThai" ${state.reportOpts.thaiNum ? "checked" : ""}><span class="sw"></span> ใช้เลขไทยในเอกสาร</label>
         </div>
       </div>
-      <div id="todoBox"></div>
-      <div id="combineBox"></div>
-      <div class="rp-actions">
-        <button class="btn primary" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกทั้งหมด</button>
-        <button class="btn" id="btnDoc"><i data-lucide="download"></i> ดาวน์โหลด .docx</button>
-        <button class="btn" id="btnPrint"><i data-lucide="printer"></i> พิมพ์ / PDF</button>
+      <div class="rp-drawer-side">
+        <div id="todoBox"></div>
+        <div id="combineBox"></div>
+        <p class="rp-hint">ตัวอย่างบนจอจัดรูปแบบให้อ่านสบายตา — เมื่อคัดลอกหรือดาวน์โหลด .docx จะได้ฟอร์แมตเอกสารราชการ (TH Sarabun 16pt) โดยอัตโนมัติ${activeFilterText() ? ` · ตัวกรอง: ${esc(activeFilterText())}` : ""}</p>
       </div>
-      <p class="rp-hint">คัดลอกหรือดาวน์โหลด .docx แล้วเปิดใน Microsoft Word ได้ทันที — ฟอนต์ TH Sarabun 16pt เลขอารบิก ตามแบบเอกสารราชการ${activeFilterText() ? ` · ตัวกรอง: ${esc(activeFilterText())}` : ""}</p>
-    </aside>
-    <div class="report-main anim-slide-r">
-      <div class="rp-docbar">
-        <span class="rp-dots"><i></i><i></i><i></i></span>
-        <span class="rp-docname"><i data-lucide="file-text"></i> ตัวอย่างเอกสาร · A4</span>
-        <span class="rp-pages">${blocks.length} ส่วน</span>
-      </div>
-      <div class="report-scroll"><div class="paper"></div></div>
-    </div>`;
+    </div>
+    <div class="report-scroll anim-slide-r"><div class="paper doc-view"></div></div>`;
   panel.appendChild(layout);
 
   // การ์ดรายการที่ควรตรวจสอบก่อนใช้เอกสาร (สร้างระหว่าง buildReportBlocks)
@@ -2719,6 +2718,11 @@ function renderReport(panel, rows) {
     });
   })();
 
+  $("#btnRpSettings").onclick = () => {
+    state._rpOpen = !state._rpOpen;
+    $("#rpDrawer", layout).classList.toggle("hidden", !state._rpOpen);
+    $("#btnRpSettings", layout).classList.toggle("active-btn", state._rpOpen);
+  };
   $("#projName").onchange = (e) => { state.projectName = e.target.value; saveSessionSnapshot(); renderActiveTab(); };
   $("#selChartStyle").onchange = (e) => {
     state.reportOpts.charts = e.target.value !== "none";
