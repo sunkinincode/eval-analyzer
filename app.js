@@ -86,7 +86,7 @@ const state = {
   activeTab: "dashboard",
   charts: [],        // Chart instances ของแท็บที่แสดงอยู่
   projectName: "",
-  reportOpts: { charts: true, chartStyle: "summary", freq: false, thaiNum: false, passMark: 3.51 },
+  reportOpts: { charts: true, chartStyle: "summary", freq: false, thaiNum: false, passMark: 3.51, objectives: "", appendix: true },
   ui: { showFreq: false },
   user: null,        // { name, role } — จาก localStorage
   sessionId: null,   // id ของรายการประวัติที่กำลังทำงานอยู่
@@ -365,6 +365,7 @@ async function saveSessionSnapshot() {
       rows: state.rows,
       colTypes: state.columns.map((c) => ({ type: c.type, group: c.group, item: c.item, mergeInto: c.mergeInto ?? null, noReport: c.noReport ?? false })),
       overallMean: (() => { const m = analyzeDataset(state.rows, state.columns).overall.mean; return Number.isFinite(m) ? m : null; })(),
+      reportOpts: { ...state.reportOpts },
     });
   } catch (e) { console.warn("บันทึกประวัติไม่สำเร็จ", e); }
 }
@@ -1078,8 +1079,35 @@ const endLabelPlugin = {
   },
 };
 
+/** plugin: เส้นประแนวตั้งแสดงเกณฑ์ความสำเร็จ (เช่น 3.51) ในกราฟแท่งแนวนอน */
+const passLinePlugin = {
+  id: "passLine",
+  afterDatasetsDraw(chart, _a, opts) {
+    if (!opts || !Number.isFinite(opts.x)) return;
+    const xs = chart.scales.x, area = chart.chartArea;
+    if (!xs || !area) return;
+    const px = xs.getPixelForValue(opts.x);
+    if (!Number.isFinite(px)) return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.strokeStyle = opts.color || "#c2410c";
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(px, area.top); ctx.lineTo(px, area.bottom); ctx.stroke();
+    ctx.setLineDash([]);
+    if (opts.label) {
+      ctx.font = `600 10.5px ${FONT_STACK}`;
+      ctx.fillStyle = opts.color || "#c2410c";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(opts.label, px, area.top - 3);
+    }
+    ctx.restore();
+  },
+};
+
 /** สร้าง config กราฟแท่งแนวนอนของค่าเฉลี่ย (0–5) */
-function cfgMeanBar(labels, means, t, title) {
+function cfgMeanBar(labels, means, t, title, opts = {}) {
   return {
     type: "bar",
     data: {
@@ -1093,7 +1121,7 @@ function cfgMeanBar(labels, means, t, title) {
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { right: 52 } },
+      layout: { padding: { right: 52, top: opts.passLine ? 16 : 0 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1104,13 +1132,14 @@ function cfgMeanBar(labels, means, t, title) {
           },
         },
         endLabel: { color: t.text, labels: means.map(f2) },
+        passLine: opts.passLine ? { x: opts.passLine, label: opts.passLabel || "", color: "#c2410c" } : false,
       },
       scales: {
         x: { min: 0, max: 5, grid: { color: t.grid }, border: { color: t.axis }, ticks: { stepSize: 1, color: t.muted, font: { family: FONT_STACK, size: 11 } } },
         y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false } },
       },
     },
-    plugins: [endLabelPlugin],
+    plugins: [endLabelPlugin, passLinePlugin],
   };
 }
 
@@ -1816,11 +1845,11 @@ function wCaption(no, title) {
 function wTable(headCells, bodyRows) {
   const th = headCells.map((h) => `<td style="${W_TD}text-align:center;font-weight:bold;">${h}</td>`).join("");
   const trs = bodyRows.map((cells) =>
-    `<tr>${cells.map((c) => `<td style="${W_TD}${c.align ? `text-align:${c.align};` : "text-align:center;"}${c.bold ? "font-weight:bold;" : ""}">${c.html}</td>`).join("")}</tr>`
+    `<tr>${cells.map((c) => `<td ${c.span ? `colspan="${c.span}" ` : ""}style="${W_TD}${c.align ? `text-align:${c.align};` : "text-align:center;"}${c.bold ? "font-weight:bold;" : ""}">${c.html}</td>`).join("")}</tr>`
   ).join("");
   return `<table style="border-collapse:collapse;width:100%;${W_FONT}" border="1"><tr>${th}</tr>${trs}</table>`;
 }
-const cell = (html, align, bold) => ({ html, align, bold });
+const cell = (html, align, bold, span) => ({ html, align, bold, span });
 
 /** สร้างชุดข้อมูลจากรายการในประวัติ (สำหรับรวมหลายแบบประเมินในเล่มเดียว) */
 function datasetFromRecord(s) {
@@ -1863,17 +1892,21 @@ function passMark() {
   return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 3.51;
 }
 
-/** จัดหมวดด้านเพื่อเรียงรายงานเป็นกลุ่ม: มาตรฐานกลาง / ตามประเภทโครงการ / เฉพาะโครงการ */
-function classifyGroup(name) {
-  if (/PSU|Identity|5Hs|Holistic|คุณลักษณะ|ทักษะแห่งอนาคต|พึงพอใจต่อภาพรวม/i.test(name)) return "core";
-  if (/^ประเภท/.test(String(name).trim())) return "type";
-  return "custom";
+/* ============================================================
+   รายงานราชการ — โครง 8 ส่วน + ภาคผนวก
+   หลักสำคัญ: แยกฐานผู้ประเมิน (ห้ามปนตาราง/กราฟข้ามฐานโดยไม่บอก n)
+   · กราฟเนื้อหาหลัก ≤ 2 · ความคิดเห็นปลายเปิดจัดเป็น Theme
+   · เชื่อมผลกับวัตถุประสงค์ · รายละเอียดรายข้อย้ายไปภาคผนวก
+   ============================================================ */
+
+/* รายการที่ควรตรวจก่อนใช้เอกสาร — เก็บระหว่างสร้างรายงาน แสดงในแผงตั้งค่า (ไม่ลงในเอกสาร) */
+let _reportTodos = [];
+const addTodo = (t) => { if (!_reportTodos.includes(t)) _reportTodos.push(t); };
+
+function joinThai(arr) {
+  if (arr.length <= 1) return arr.join("");
+  return arr.slice(0, -1).join(" ") + " และ" + arr[arr.length - 1];
 }
-const GROUP_CAT_LABEL = {
-  core: "ผลการประเมินมาตรฐานกลาง (PSU Identity / 5Hs / ความพึงพอใจภาพรวม)",
-  type: "ผลการประเมินตามประเภทโครงการ",
-  custom: "ผลการประเมินเฉพาะโครงการ",
-};
 
 /** ใครคือผู้ประเมินด้านนี้ — นับจากแถวที่ตอบข้อใดข้อหนึ่งของด้าน จำแนกตามสถานะผู้ตอบ */
 function respondentsOfGroup(rows, g, columns) {
@@ -1890,273 +1923,699 @@ function respondentsOfGroup(rows, g, columns) {
       byStatus.set(v, (byStatus.get(v) || 0) + 1);
     }
   }
-  const list = [...byStatus.entries()].sort((a, b) => b[1] - a[1]);
+  const list = [...byStatus.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count }));
   let text;
-  if (!list.length) {
-    text = `ผู้เข้าร่วมโครงการที่ตอบแบบประเมิน ${n} คน`;
-  } else {
-    const top = list.slice(0, 3).map(([l, c]) => `${l} ${c} คน`).join(", ");
-    const restN = list.slice(3).reduce((a, [, c]) => a + c, 0);
-    text = top + (restN ? ` และอื่น ๆ ${restN} คน` : "") + ` (รวม ${n} คน)`;
-  }
-  return { n, text };
+  if (!list.length) text = `ผู้เข้าร่วมโครงการที่ตอบแบบประเมิน จำนวน ${n} คน`;
+  else if (list.length === 1) text = `${list[0].label} จำนวน ${n} คน`;
+  else text = joinThai(list.map((x) => `${x.label} จำนวน ${x.count} คน`)) + ` รวม ${n} คน`;
+  return { n, text, list };
 }
 
+/** จัดด้านออกเป็น "ฐานผู้ประเมิน" — ด้านที่ผู้ตอบเป็นคนละกลุ่ม/จำนวนต่างกันมาก ห้ามรายงานปนกัน
+    ฐานหลัก = ด้านที่ฐานผู้ตอบใหญ่ (ผู้เข้าร่วม) · ฐานรอง = ด้านที่ตอบเฉพาะกลุ่มเล็ก (เช่น ผู้จัด/บุคลากร ประเมิน 5Hs) */
+function groupBases(rows, groups, columns) {
+  const infos = groups.map((g) => ({ g, who: respondentsOfGroup(rows, g, columns) }));
+  const maxN = Math.max(0, ...infos.map((x) => x.who.n));
+  const main = [], minor = [];
+  infos.forEach((x) => ((maxN && x.who.n < maxN * 0.6) ? minor : main).push(x));
+  const mkBase = (list, kind) => {
+    const rep = list.reduce((a, b) => (b.who.n > a.who.n ? b : a), list[0]);
+    const statuses = rep.who.list.map((s) => s.label).join(" ");
+    let title;
+    if (kind === "main") {
+      title = /นักศึกษา|ผู้เข้าร่วม/.test(statuses) || !statuses ? "ผลการประเมินจากผู้เข้าร่วมโครงการ" : `ผลการประเมินจาก${rep.who.list[0]?.label || "ผู้ตอบแบบประเมิน"}`;
+    } else {
+      title = /สโมสร|ชุมนุม|อาจารย์|บุคลากร|กรรมการ|ผู้จัด|หลักสูตร/.test(statuses) ? "ผลการประเมินจากผู้จัดโครงการและบุคลากร" : `ผลการประเมินจาก${rep.who.list[0]?.label || "ผู้ประเมินกลุ่มเฉพาะ"}`;
+    }
+    return { kind, title, n: rep.who.n, whoText: rep.who.text, list };
+  };
+  const bases = [];
+  if (main.length) bases.push(mkBase(main, "main"));
+  if (minor.length) bases.push(mkBase(minor, "minor"));
+  return bases;
+}
+
+/* ---------- การวิเคราะห์ความคิดเห็นปลายเปิด (Theme coding) ---------- */
+
+const NON_SUBSTANTIVE_RE = /^(ไม่มี(ครับ|ค่ะ|คับ|จ้า)?|ไม่|no|none|nope|-+|–|—|\.+|\*+|_+|\/+|ok(ครับ|ค่ะ)?|โอเค(ครับ|ค่ะ)?|ดี(ครับ|ค่ะ|มาก|มากๆ|มากครับ|มากค่ะ|เยี่ยม)?|เยี่ยม(มาก)?|ครับ|ค่ะ|5+\+?|❤+|👍+)$/i;
+
+const LIKE_THEMES = [
+  { key: "fun", name: "ความสนุกและบรรยากาศของกิจกรรม", re: /สนุก|บรรยากาศ|ประทับใจ|มีความสุข|ความสุข|ตื่นเต้น|น่าสนใจ|ไม่น่าเบื่อ|สนุกสนาน/ },
+  { key: "staff", name: "การดูแลและความเป็นมิตรของรุ่นพี่และผู้จัด", re: /พี่ๆ|รุ่นพี่|สต[าั]ฟ|staff|ผู้จัด|วิทยากร|ดูแล|เป็นกันเอง|น่ารัก|ใจดี|friendly/i },
+  { key: "friend", name: "การสร้างความสัมพันธ์และการรู้จักเพื่อนใหม่", re: /เพื่อน|รู้จักกัน|ความสัมพันธ์|สัมพันธ|สนิท|สามัคคี|ทำงานร่วมกัน|เป็นส่วนหนึ่ง|ละลายพฤติกรรม/ },
+  { key: "learn", name: "ความรู้และประสบการณ์ที่ได้รับ", re: /ความรู้|ได้เรียนรู้|ได้รู้|เข้าใจ|ประสบการณ์|เปิดโลก|ได้ฝึก|พัฒนาตนเอง/ },
+  { key: "joinin", name: "การมีส่วนร่วมในกิจกรรม", re: /มีส่วนร่วม|ได้ร่วม|ได้เล่น|ได้ทำกิจกรรม|ได้แสดง/ },
+];
+
+const IMPROVE_THEMES = [
+  { key: "time", name: "การบริหารเวลาและกำหนดการ", re: /เวลา|ล่าช้า|เลท|เลิกดึก|ดึก|เช้า(ไป|เกิน)|นาน(ไป|เกิน)|เร่ง|รีบ|ตรงต่อเวลา|ยืดเยื้อ|เลิกช้า|delay|กระชับ/i,
+    fix: "จัดทำกำหนดการ (Run Sheet) รายกิจกรรม ระบุเวลาเริ่ม–สิ้นสุด ผู้ควบคุมเวลา และเวลาสำรอง (Buffer) ระหว่างกิจกรรม พร้อมกำหนดเวลาเลิกกิจกรรมรวมที่ชัดเจนและถือปฏิบัติอย่างเคร่งครัด",
+    own: "ฝ่ายกิจกรรม / ผู้ควบคุมเวที", when: "ก่อนและระหว่างโครงการ" },
+  { key: "food", name: "อาหาร เครื่องดื่ม และช่วงพัก", re: /อาหาร|ข้าว|ขนม|น้ำดื่ม|น้ำไม่พอ|หิว|เบรก|ช่วงพัก|พักน้อย|พักไม่พอ|เหนื่อย|เพลีย|พักผ่อน/,
+    fix: "สำรวจข้อจำกัดด้านอาหารของผู้เข้าร่วมล่วงหน้า จัดปริมาณอาหารและน้ำดื่มให้เพียงพอกับจำนวนจริง กำหนดจุดแจกและรอบรับอาหารให้ชัดเจน และจัดช่วงพักให้สอดคล้องกับความหนักของกิจกรรม",
+    own: "ฝ่ายสวัสดิการ", when: "ก่อนและระหว่างโครงการ" },
+  { key: "place", name: "สถานที่และสิ่งอำนวยความสะดวก", re: /สถานที่|ห้องน้ำ|ที่นั่ง|ร้อน|แอร์|อากาศ|แคบ|แออัด|ที่จอด|แสงสว่าง|สกปรก|ยุง/,
+    fix: "สำรวจความพร้อมของสถานที่ล่วงหน้าโดยเทียบกับจำนวนผู้เข้าร่วมจริง จัดเตรียมที่นั่ง จุดพัก และการระบายอากาศให้เหมาะสม และกำหนดผู้รับผิดชอบประจำจุดระหว่างการจัดกิจกรรม",
+    own: "ฝ่ายสถานที่", when: "ก่อนโครงการ" },
+  { key: "comm", name: "การสื่อสารกำหนดการและข้อมูลกิจกรรม", re: /สื่อสาร|แจ้ง(ล่วงหน้า|ให้ทราบ)?|ประกาศ|ประชาสัมพันธ์|กำหนดการ|ตารางกิจกรรม|ไม่ทราบ|สับสน|งง/,
+    fix: "เผยแพร่กำหนดการผ่านช่องทางหลักช่องทางเดียวที่ผู้เข้าร่วมทุกคนเข้าถึงได้ แจ้งการเปลี่ยนแปลงทันทีที่เกิดขึ้น และทบทวนกำหนดการร่วมกับผู้เข้าร่วมในช่วงเปิดกิจกรรมแต่ละวัน",
+    own: "ฝ่ายประชาสัมพันธ์", when: "ก่อนและระหว่างโครงการ" },
+  { key: "noise", name: "ระดับเสียงและบรรยากาศบางช่วง", re: /เสียงดัง|เสียงเบา|ไมค์|เครื่องเสียง|หนวกหู|ดังเกิน|เสียงแตก/,
+    fix: "ทดสอบระบบเสียงก่อนเริ่มกิจกรรม ปรับระดับเสียงให้เหมาะกับขนาดพื้นที่ และจัดโซนพักที่ห่างจากลำโพงสำหรับผู้ที่ต้องการพัก",
+    own: "ฝ่ายโสตทัศนูปกรณ์", when: "ก่อนและระหว่างโครงการ" },
+  { key: "queue", name: "การจัดคิวและการเดินทางระหว่างจุดกิจกรรม", re: /คิว|รอนาน|ต่อแถว|เดินไกล|สลับฐาน|ย้ายจุด|เปลี่ยนฐาน|รถรับส่ง/,
+    fix: "วางผังการหมุนเวียนกลุ่มระหว่างจุดกิจกรรมล่วงหน้า กระจายจุดลงทะเบียนหรือจุดรับของเพื่อลดการรอ และกำหนดเส้นทางเดินพร้อมผู้นำทางประจำกลุ่ม",
+    own: "ฝ่ายกิจกรรม", when: "ก่อนและระหว่างโครงการ" },
+  { key: "activity", name: "รูปแบบและสัดส่วนของกิจกรรม", re: /ซ้ำซาก|น่าเบื่อ|เบื่อ|กิจกรรมเยอะ|กิจกรรมน้อย|อยากให้มี|เพิ่มกิจกรรม|ลดกิจกรรม|ปรับกิจกรรม|หลากหลาย/,
+    fix: "ทบทวนสัดส่วนประเภทกิจกรรมจากผลประเมินและความคิดเห็นในปีนี้ ลดกิจกรรมที่ซ้ำรูปแบบ และเพิ่มหรือทดลองรูปแบบกิจกรรมที่ผู้เข้าร่วมเสนอในสัดส่วนที่เหมาะสม",
+    own: "ฝ่ายกิจกรรม", when: "ก่อนโครงการ" },
+  { key: "docs", name: "เอกสาร ชั่วโมงกิจกรรม และหลักฐานการเข้าร่วม", re: /ทรานสคริปต์|transcript|ชั่วโมงกิจกรรม|เกียรติบัตร|ใบประกาศ|ลงทะเบียน|เช็ค?ชื่อ/i,
+    fix: "ประกาศขั้นตอนและกำหนดเวลาการบันทึกชั่วโมงกิจกรรมหรือการออกหลักฐานการเข้าร่วมให้ชัดเจนตั้งแต่วันจัดกิจกรรม และกำหนดผู้รับผิดชอบตรวจสอบรายชื่อหลังเสร็จสิ้นโครงการ",
+    own: "ฝ่ายทะเบียน / เลขานุการโครงการ", when: "หลังโครงการ" },
+];
+
+const ADVICE_RE = /ควร|อยากให้|น่าจะ|ขอให้|เพิ่ม|ลด|ปรับ|แก้|เสนอ|ไม่ค่อย|ไม่พอ|ไม่ทั่วถึง|แย่|ช้า/;
+
+/** วิเคราะห์ความคิดเห็นปลายเปิดทุกคอลัมน์: คัดกรอง → จำแนกชื่นชอบ/ควรปรับปรุง → จัด Theme + นับความถี่ + เลือกตัวแทน */
+function codeComments(rows, columns) {
+  const textCols = columns.filter((c) => c.type === "text" && !c.noReport);
+  const raw = [];
+  textCols.forEach((c) => {
+    const bias = /ปรับปรุง|เสนอแนะ|แก้ไข|พัฒนา|ปัญหา|อุปสรรค/.test(c.header) ? "improve"
+      : /ประทับใจ|ชื่นชอบ|ชอบ|ประโยชน์|ได้รับ/.test(c.header) ? "like" : "neutral";
+    textAnswers(rows, c.i).forEach((a) => raw.push({ text: a.text, n: a.n, bias, col: c.header }));
+  });
+  const total = raw.reduce((s, x) => s + x.n, 0);
+  const clean = [];
+  let dropped = 0;
+  raw.forEach((x) => {
+    const t = x.text.trim();
+    if (t.length < 2 || NON_SUBSTANTIVE_RE.test(t)) { dropped += x.n; return; }
+    clean.push(x);
+  });
+  const substantive = clean.reduce((s, x) => s + x.n, 0);
+
+  const like = LIKE_THEMES.map((th) => ({ ...th, count: 0, samples: [] }));
+  const improve = IMPROVE_THEMES.map((th) => ({ ...th, count: 0, samples: [] }));
+  const otherLike = { key: "other", name: "อื่น ๆ", count: 0, samples: [] };
+  const otherImp = { key: "other", name: "อื่น ๆ", count: 0, samples: [] };
+
+  clean.forEach((x) => {
+    const t = x.text;
+    const isAdvice = x.bias === "improve" || (x.bias === "neutral" && ADVICE_RE.test(t));
+    const pool = isAdvice ? improve : like;
+    const other = isAdvice ? otherImp : otherLike;
+    // ความเห็นหนึ่งข้ออาจแตะหลายประเด็น — นับให้ทุก Theme ที่กล่าวถึง (ระบุไว้ในหมายเหตุตาราง)
+    const hits = pool.filter((th) => th.re.test(t));
+    if (!hits.length) { other.count += x.n; other.samples.push(x); return; }
+    hits.forEach((th) => { th.count += x.n; th.samples.push(x); });
+  });
+
+  const pickSamples = (th) => {
+    const ok = th.samples.filter((s) => s.text.length >= 10 && s.text.length <= 140);
+    if (!ok.length) return [];
+    // ตัวแทนที่ 1: ข้อความที่ถูกกล่าวซ้ำมากที่สุด · ตัวแทนที่ 2: ข้อความยาวพอมีรายละเอียด
+    const byN = [...ok].sort((a, b) => b.n - a.n || Math.abs(a.text.length - 55) - Math.abs(b.text.length - 55));
+    const out = [byN[0]];
+    const detailed = ok.filter((s) => s !== byN[0] && s.text.length >= 25)
+      .sort((a, b) => Math.abs(a.text.length - 65) - Math.abs(b.text.length - 65))[0];
+    if (detailed) out.push(detailed);
+    else if (byN[1]) out.push(byN[1]);
+    return out.map((s) => s.text);
+  };
+  const finish = (arr, other) => {
+    const out = arr.filter((t) => t.count > 0).sort((a, b) => b.count - a.count)
+      .map((t) => ({ ...t, samples: pickSamples(t) }));
+    if (other.count > 0) out.push({ ...other, samples: pickSamples(other) });
+    return out;
+  };
+  return { total, substantive, dropped, like: finish(like, otherLike), improve: finish(improve, otherImp) };
+}
+
+/* ---------- ตัวช่วยประกอบเอกสาร ---------- */
+
+function wAppCaption(no, title) {
+  return `<p style="${W_P}text-align:left;margin-bottom:2pt;"><b>ตารางผนวกที่ ${no}</b>&nbsp;&nbsp;${esc(title)}</p>`;
+}
+function secHeadHtml(no, title) {
+  return `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin:14pt 0 4pt 0;">ส่วนที่ ${no}  ${esc(title)}</p>`;
+}
+function subHeadHtml(t) {
+  return wp(`<b>${esc(t)}</b>`, { indent: false, align: "left" });
+}
+function baseLine(whoText) {
+  return `<p style="${W_P}text-align:left;margin:0 0 6pt 0;"><b>ฐานผู้ประเมิน:</b> ${esc(whoText)}</p>`;
+}
+function chartImg(url, no, caption, appendix = false) {
+  return `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>` +
+    `<p style="${W_P}text-align:center;margin-top:0;"><b>${appendix ? "แผนภูมิผนวกที่" : "แผนภูมิที่"} ${no}</b>&nbsp;&nbsp;${esc(caption)}</p>`;
+}
+
+/** ตารางรายด้าน (เรียงค่าเฉลี่ยสูง→ต่ำ) + คอลัมน์ผ่านเกณฑ์ */
+function groupSummaryTable(list, pm, { rank = false } = {}) {
+  const sorted = [...list].sort((a, b) => b.g.total.mean - a.g.total.mean);
+  const head = rank ? ["ด้านการประเมิน", "x̄", "S.D.", "ระดับผล", "ลำดับ"] : ["ด้านการประเมิน", "x̄", "S.D.", "ระดับผล", "ผลตามเกณฑ์"];
+  const body = sorted.map((x, i) => [
+    cell(esc(x.g.name), "left"),
+    cell(f2(x.g.total.mean)), cell(f2(x.g.total.sd)), cell(levelLabel(x.g.total.mean)),
+    rank ? cell(String(i + 1)) : cell(x.g.total.mean >= pm ? "ผ่าน" : "ไม่ผ่าน", "center", x.g.total.mean < pm),
+  ]);
+  return { sorted, html: wTable(head, body) };
+}
+
+/** ย่อหน้าวิเคราะห์หลังตารางรายด้าน: สูงสุด/รองลงมา/ต่ำสุด + ความหมาย — ไม่ไล่ตัวเลขทุกค่า */
+function analysisPara(sorted, pm, ctx) {
+  if (!sorted.length) return "";
+  const top = sorted[0].g, second = sorted[1]?.g, low = sorted[sorted.length - 1].g;
+  const failed = sorted.filter((x) => x.g.total.mean < pm);
+  let t = `ผลการประเมินสะท้อนว่าจุดเด่นของ${ctx}คือ${esc(top.name)} ซึ่งมีค่าเฉลี่ยสูงสุด (x̄ = ${f2(top.total.mean)})`;
+  if (second && sorted.length > 2) t += ` รองลงมาคือ${esc(second.name)} (x̄ = ${f2(second.total.mean)})`;
+  if (low !== top) {
+    t += ` ขณะที่ด้านที่มีค่าเฉลี่ยต่ำกว่าด้านอื่นคือ${esc(low.name)} (x̄ = ${f2(low.total.mean)})`;
+    t += low.total.mean >= pm
+      ? ` ซึ่งยังผ่านเกณฑ์และอยู่ในระดับ${levelLabel(low.total.mean)} จึงถือเป็นประเด็นที่มีโอกาสพัฒนาในการจัดโครงการครั้งต่อไป`
+      : ` ซึ่งไม่ผ่านเกณฑ์ที่กำหนด จึงควรได้รับการพิจารณาปรับปรุงเป็นลำดับต้นในการจัดโครงการครั้งต่อไป`;
+  }
+  if (failed.length && low.total.mean >= pm) t += ` ทั้งนี้ มีด้านที่ไม่ผ่านเกณฑ์ ${failed.length} ด้าน`;
+  return wp(t);
+}
+
+/* ---------- โครงรายงานหลัก ---------- */
+
 function buildReportBlocks(rows) {
+  _reportTodos = [];
   const datasets = assembleReportDatasets(rows);
   const multi = datasets.length > 1;
-  const rk = state.reportExtraIds.size ? [...state.reportExtraIds].join(",") : "solo"; // กันแคชรูปกราฟชนกันระหว่างชุดผสม
+  const rk = state.reportExtraIds.size ? [...state.reportExtraIds].join(",") : "solo";
   const blocks = [];
-  const num = { table: 0, chart: 0 };
+  const num = { table: 0, chart: 0, sec: 0, appTable: 0, appChart: 0, mainCharts: 0 };
+  const appendix = [];
+  const pm = passMark();
   const projName = state.projectName.trim();
   const projText = projName ? `โครงการ${projName.replace(/^โครงการ/, "")}` : "โครงการ";
   const filterNote = activeFilterText() ? ` (เฉพาะกลุ่ม: ${activeFilterText()})` : "";
+  const totalResp = datasets.reduce((a, d) => a + d.rows.length, 0);
 
   // ---------- หัวรายงาน ----------
-  const totalResp = datasets.reduce((a, d) => a + d.rows.length, 0);
-  let intro;
-  if (multi) {
-    intro = `การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบประเมินจำนวน ${datasets.length} ชุด ได้แก่ ${datasets.map((d, i) => `(${i + 1}) ${esc(d.label)} มีผู้ตอบ ${d.rows.length} คน`).join(" ")} รวมผู้ตอบทั้งสิ้น <b>${totalResp}</b> คน${esc(filterNote)} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`;
-  } else {
-    const d = datasets[0];
-    intro = `การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วยแบบสอบถาม มีผู้ตอบแบบสอบถามทั้งสิ้น <b>${d.rows.length}</b> คน${esc(filterNote)}${d.mergedFrom.length ? ` (รวมข้อมูลจาก ${d.mergedFrom.length + 1} ไฟล์)` : ""}${d.respTarget ? ` จากกลุ่มเป้าหมาย ${d.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((d.totalAll / d.respTarget) * 100).toFixed(2)}` : ""} ผู้จัดทำได้นำข้อมูลมาวิเคราะห์ด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) โดยมีผลการวิเคราะห์ดังนี้`;
-  }
   blocks.push({
     title: "หัวรายงาน",
     html:
-      `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการวิเคราะห์ข้อมูลแบบประเมินผลการดำเนินการ${esc(projText)}</p>` +
-      wp(intro),
+      `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;">ผลการประเมิน${esc(projText)}</p>` +
+      wp(`การประเมินผลการดำเนินการ${esc(projText)} เก็บรวบรวมข้อมูลด้วย${multi ? `แบบประเมินจำนวน ${datasets.length} ชุด` : "แบบสอบถาม"} มีผู้ตอบแบบประเมินรวมทั้งสิ้น <b>${totalResp}</b> คน${esc(filterNote)} รายละเอียดวิธีการประเมินปรากฏในส่วนที่ 1 และสรุปผลสำคัญปรากฏในบทสรุปสำหรับผู้บริหาร (ส่วนที่ 2)`),
   });
 
-  // ---------- บทสรุปสำหรับผู้บริหาร: ตอบ "โครงการสำเร็จไหม" ตั้งแต่หน้าแรก ----------
-  const pm = passMark();
-  const execRows = [];
-  let passCount = 0, groupCount = 0;
-  datasets.forEach((ds, di) => {
-    ds.analysis.groups.forEach((g) => {
-      groupCount++;
-      const ok = g.total.mean >= pm;
-      if (ok) passCount++;
-      const who = respondentsOfGroup(ds.rows, g, ds.columns);
-      execRows.push([
-        cell((multi ? `[ชุดที่ ${di + 1}] ` : "") + esc(g.name), "left"),
-        cell(esc(who.text), "left"),
-        cell(f2(g.total.mean)), cell(f2(g.total.sd)),
-        cell(levelLabel(g.total.mean)),
-        cell(ok ? "ผ่าน" : "ไม่ผ่าน", "center", !ok),
-      ]);
-    });
-  });
-  if (groupCount) {
-    const allVals = datasets.flatMap((d) => d.analysis.groups.flatMap((g) => g._vals));
-    const grand = statsFromVals(allVals);
-    const grandOk = grand.mean >= pm;
-    const allSdgs = datasets.flatMap((d) => d.analysis.sdgs);
-    const okSdg = allSdgs.filter((x) => x.pct >= 50);
-    num.table++;
-    let ex = wp("<b>บทสรุปสำหรับผู้บริหาร</b>", { indent: false, align: "left" });
-    ex += wp(`โครงการกำหนดเกณฑ์ความสำเร็จที่ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ผลการประเมินโดยรวมอยู่ในระดับ<b>${levelLabel(grand.mean)}</b> (x̄ = ${f2(grand.mean)}, S.D. = ${f2(grand.sd)}) <b>${grandOk ? "ผ่านเกณฑ์ที่กำหนด จึงถือว่าโครงการบรรลุวัตถุประสงค์" : "ยังไม่ผ่านเกณฑ์ที่กำหนด ควรนำผลไปทบทวนการดำเนินงาน"}</b> โดยผ่านเกณฑ์ ${passCount} จากทั้งหมด ${groupCount} ด้าน${allSdgs.length ? ` และผลการดำเนินงานสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs) จำนวน ${okSdg.length} จาก ${allSdgs.length} เป้าหมายที่ประเมิน` : ""} รายละเอียดดังตารางที่ ${num.table}`);
-    ex += wCaption(num.table, `สรุปผลการประเมินรายด้าน ผู้ประเมิน และผลตามเกณฑ์ความสำเร็จ (ค่าเฉลี่ย ≥ ${pm.toFixed(2)})`);
-    ex += wTable(
-      ["ด้านการประเมิน", "ผู้ประเมิน", "x̄", "S.D.", "ระดับผล", "ผลตามเกณฑ์"],
-      [...execRows,
-       [cell("รวมทั้งโครงการ", "center", true), cell(""), cell(f2(grand.mean), "center", true), cell(f2(grand.sd), "center", true), cell(levelLabel(grand.mean), "center", true), cell(grandOk ? "ผ่าน" : "ไม่ผ่าน", "center", true)]]
-    );
-    if (state.reportOpts.charts) {
-      num.chart++;
-      const names = datasets.flatMap((d, dj) => d.analysis.groups.map((g) => (multi ? `[${dj + 1}] ` : "") + g.name));
-      const means = datasets.flatMap((d) => d.analysis.groups.map((g) => g.total.mean));
-      const url = cachedChartURL(`${rk}|exec`, () => chartToDataURL(cfgMeanBar(names, means, themeVars(true)), 860, Math.max(200, names.length * 50 + 60)));
-      ex += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-      ex += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${num.chart}</b>&nbsp;&nbsp;เปรียบเทียบค่าเฉลี่ยผลการประเมินรายด้าน</p>`;
-    }
-    blocks.push({ title: "บทสรุปสำหรับผู้บริหาร", html: ex });
-  }
+  // ---------- ส่วนที่ 1 วิธีการประเมินโครงการ (อิงชุดหลัก) ----------
+  const md = datasets[0];
+  blocks.push(methodologyBlock(md, num, pm, multi, datasets));
 
-  // ---------- เนื้อหารายชุดข้อมูล (เลขตาราง/แผนภูมิต่อเนื่องกันทั้งเล่ม) ----------
+  // ---------- ส่วนที่ 2 บทสรุปสำหรับผู้บริหาร ----------
+  const execB = execSummaryBlock(datasets, num, pm, multi);
+  if (execB) blocks.push(execB);
+
+  // ---------- ผลการประเมินรายชุด (ส่วนที่ 3 เป็นต้นไป เลขต่อเนื่อง) ----------
   datasets.forEach((ds, di) => {
     if (multi) {
-      const respLine = ds.respTarget
-        ? `แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน จากกลุ่มเป้าหมาย ${ds.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((ds.totalAll / ds.respTarget) * 100).toFixed(2)}`
-        : `แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน`;
       blocks.push({
-        title: `ส่วนที่ ${di + 1}: ${ds.label}`,
-        html: `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin-top:14pt;">ส่วนที่ ${di + 1}  ${esc(ds.label)}</p>` + wp(respLine),
+        title: `แบบประเมินชุดที่ ${di + 1}: ${ds.label}`,
+        html: `<p style="${W_P}text-align:left;font-weight:bold;font-size:17pt;margin-top:14pt;">ผลของแบบประเมินชุดที่ ${di + 1}  ${esc(ds.label)}</p>` +
+          wp(`แบบประเมินชุดนี้มีผู้ตอบ ${ds.rows.length} คน${ds.respTarget ? ` จากกลุ่มเป้าหมาย ${ds.respTarget} คน คิดเป็นอัตราการตอบกลับร้อยละ ${((ds.totalAll / ds.respTarget) * 100).toFixed(2)}` : ""}`),
       });
     }
-    blocks.push(...datasetBlocks(ds, num, rk));
+    const r = datasetBlocks(ds, num, rk);
+    blocks.push(...r.blocks);
+    appendix.push(...r.appendix);
   });
 
   // ---------- หมายเหตุเกณฑ์ ----------
   if (datasets.some((d) => d.analysis.groups.length)) {
     blocks.push({
       title: "หมายเหตุเกณฑ์การแปลผล",
-      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} · เกณฑ์ความสำเร็จของโครงการ: ค่าเฉลี่ยตั้งแต่ ${passMark().toFixed(2)} ขึ้นไป · แปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
+      html: wp(`<b>หมายเหตุ</b> ${esc(CRITERIA_NOTE)} · เกณฑ์ความสำเร็จของโครงการ: ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป · แปลผลความสอดคล้อง SDGs โดยถือเกณฑ์ร้อยละ 50 ขึ้นไปของผู้ตอบแบบสอบถาม`, { indent: false, align: "left" }),
     });
+  }
+
+  // ---------- ภาคผนวก ----------
+  if (state.reportOpts.appendix && appendix.length) {
+    blocks.push({
+      title: "ภาคผนวก",
+      html: `<p style="${W_P}text-align:center;font-weight:bold;font-size:18pt;margin-top:16pt;">ภาคผนวก</p>` +
+        wp("ภาคผนวกรวบรวมรายละเอียดประกอบผลการประเมิน ได้แก่ ตารางผลการประเมินรายข้อ ข้อมูลทั่วไปของผู้ตอบโดยละเอียด และความคิดเห็นปลายเปิดฉบับเต็ม เพื่อใช้อ้างอิงและตรวจสอบ", { indent: false, align: "left" }),
+    });
+    blocks.push(...appendix);
   }
   return blocks;
 }
 
-/** บล็อกรายงาน (ตอนที่ 1–4) ของชุดข้อมูลหนึ่งชุด — เลขตาราง/แผนภูมิรับต่อจาก num */
+/** ส่วนที่ 1 วิธีการประเมินโครงการ: เครื่องมือ · กลุ่มผู้ตอบ · สถิติและเกณฑ์ · ข้อจำกัด */
+function methodologyBlock(ds, num, pm, multi, datasets) {
+  const { rows, columns } = ds;
+  const groups = ds.analysis.groups;
+  num.sec++;
+  const s = num.sec;
+  let html = secHeadHtml(s, "วิธีการประเมินโครงการ");
+
+  // 1.1 เครื่องมือที่ใช้ — บรรยายจากองค์ประกอบที่มีจริงในแบบประเมิน
+  const parts = [];
+  if (columns.some((c) => c.type === "categorical")) parts.push("ข้อมูลทั่วไปของผู้ตอบ");
+  if (groups.length) parts.push(`แบบมาตรประมาณค่า (Rating Scale) 5 ระดับ จำนวน ${groups.length} ด้าน รวม ${groups.reduce((a, g) => a + g.items.length, 0)} ข้อ`);
+  if (ds.analysis.sdgs.length) parts.push(`การประเมินความสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs) จำนวน ${ds.analysis.sdgs.length} เป้าหมาย`);
+  if (columns.some((c) => c.type === "text" && !c.noReport)) parts.push("ความคิดเห็นและข้อเสนอแนะปลายเปิด");
+  html += subHeadHtml(`${s}.1  เครื่องมือที่ใช้`);
+  html += wp(`เครื่องมือที่ใช้ในการประเมินเป็นแบบสอบถาม${multi ? ` จำนวน ${datasets.length} ชุด` : ""} ประกอบด้วย ${joinThai(parts)} โดยเก็บรวบรวมข้อมูลจากผู้เกี่ยวข้องกับโครงการภายหลังเสร็จสิ้นการดำเนินกิจกรรม`);
+
+  // 1.2 กลุ่มผู้ตอบแบบประเมิน — ตารางฐานผู้ตอบ + ประเด็นที่แต่ละกลุ่มประเมิน
+  const statusIdx = columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  const bases = groupBases(rows, groups, columns);
+  if (statusIdx >= 0) {
+    const { entries, total } = catFreq(rows, statusIdx, columns);
+    if (entries.length) {
+      // ประเด็นที่ประเมินของแต่ละกลุ่ม: ดูจากด้านที่กลุ่มนั้นปรากฏเป็นผู้ตอบ
+      const topicOf = (label) => {
+        const gs = groups.filter((g) => respondentsOfGroup(rows, g, columns).list.some((x) => x.label === label && x.count > 0));
+        if (!gs.length) return "—";
+        if (gs.length === groups.length) return "ทุกด้านของแบบประเมิน";
+        if (gs.length <= 2) return joinThai(gs.map((g) => g.name));
+        return `${gs.length} ด้าน ได้แก่ ${gs[0].name} ${gs[1].name} ฯลฯ`;
+      };
+      num.table++;
+      html += subHeadHtml(`${s}.2  กลุ่มผู้ตอบแบบประเมิน`);
+      html += wCaption(num.table, "จำนวนและสัดส่วนของผู้ตอบแบบประเมิน จำแนกตามกลุ่มผู้ประเมิน");
+      html += wTable(
+        ["กลุ่มผู้ประเมิน", "จำนวน (คน)", "ร้อยละ", "ประเด็นที่ประเมิน"],
+        [
+          ...entries.map((e) => [cell(esc(e.label), "left"), cell(String(e.n)), cell(e.pct.toFixed(2)), cell(esc(topicOf(e.label)), "left")]),
+          [cell("รวม", "center", true), cell(String(total), "center", true), cell("100.00", "center", true), cell("—", "center", true)],
+        ]
+      );
+    }
+  } else {
+    html += subHeadHtml(`${s}.2  กลุ่มผู้ตอบแบบประเมิน`);
+    html += wp(`ผู้ตอบแบบประเมินเป็นผู้เข้าร่วมโครงการ จำนวน ${rows.length} คน โดยแบบประเมินไม่ได้จำแนกสถานะของผู้ตอบ`);
+  }
+
+  // 1.3 สถิติและเกณฑ์การแปลผล
+  html += subHeadHtml(`${s}.3  สถิติและเกณฑ์การแปลผล`);
+  html += wp(`วิเคราะห์ข้อมูลด้วยสถิติเชิงพรรณนา ได้แก่ ความถี่ (Frequency) ร้อยละ (Percentage) ค่าเฉลี่ย (x̄) และส่วนเบี่ยงเบนมาตรฐาน (S.D.) ${esc(CRITERIA_NOTE)} ทั้งนี้ โครงการหรือประเด็นการประเมินถือว่า<b>ผ่านเกณฑ์</b>เมื่อมีค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป`);
+
+  // 1.4 ข้อจำกัดของข้อมูล — สร้างเฉพาะข้อที่เกิดขึ้นจริงกับข้อมูลชุดนี้
+  const limits = [];
+  if (bases.length > 1) {
+    limits.push(`การประเมินบางด้านใช้กลุ่มผู้ประเมินต่างกันและมีจำนวนผู้ตอบไม่เท่ากัน ผลของแต่ละด้านจึงควรพิจารณาภายในฐานผู้ตอบของตนเอง และไม่ควรนำค่าเฉลี่ยจากคนละกลุ่มมาเปรียบเทียบกันโดยตรง`);
+  }
+  const tiny = bases.flatMap((b) => b.list.flatMap((x) => x.who.list.filter((st) => st.count <= 2)));
+  const tinyLabels = [...new Set(tiny.map((t) => `${t.label} (${t.count} คน)`))];
+  if (tinyLabels.length) {
+    limits.push(`กลุ่มผู้ตอบบางกลุ่มมีจำนวนน้อยมาก ได้แก่ ${joinThai(tinyLabels)} จึงไม่ควรตีความว่าเป็นตัวแทนความคิดเห็นของกลุ่มดังกล่าวทั้งหมด`);
+  }
+  if (ds.analysis.sdgs.length) {
+    limits.push(`ผลความสอดคล้องกับ SDGs เป็นการประเมินการรับรู้ของผู้ตอบแบบประเมิน มิใช่การประเมินผลกระทบตามตัวชี้วัด SDGs อย่างเป็นทางการ`);
+  }
+  if (limits.length) {
+    html += subHeadHtml(`${s}.4  ข้อจำกัดของข้อมูล`);
+    limits.forEach((l, i) => { html += wp(`${i + 1}) ${l}`, { indent: false, align: "justify" }); });
+  }
+  return { title: `ส่วนที่ ${s} วิธีการประเมินโครงการ`, html };
+}
+
+/** ส่วนที่ 2 บทสรุปสำหรับผู้บริหาร — อ่านแยกจากส่วนอื่นได้จบในหน้าเดียว */
+function execSummaryBlock(datasets, num, pm, multi) {
+  const allInfos = [];
+  datasets.forEach((ds, di) => {
+    groupBases(ds.rows, ds.analysis.groups, ds.columns).forEach((b) => {
+      b.list.forEach((x) => allInfos.push({ ds, di, base: b, ...x }));
+      allInfos._bases = (allInfos._bases || 0) + 1;
+    });
+  });
+  if (!allInfos.length) return null;
+  const groupCount = allInfos.length;
+  const passCount = allInfos.filter((x) => x.g.total.mean >= pm).length;
+  const means = allInfos.map((x) => x.g.total.mean);
+  const mn = Math.min(...means), mx = Math.max(...means);
+  const meanOfMeans = means.reduce((a, b) => a + b, 0) / means.length;
+  const sortAll = [...allInfos].sort((a, b) => b.g.total.mean - a.g.total.mean);
+  const top = sortAll[0], low = sortAll[sortAll.length - 1];
+  const allOk = passCount === groupCount;
+  const totalResp = datasets.reduce((a, d) => a + d.rows.length, 0);
+  const allSdgs = datasets.flatMap((d) => d.analysis.sdgs);
+  const okSdg = allSdgs.filter((x) => x.pct >= 50);
+  const cc = codeComments(datasets[0].rows, datasets[0].columns);
+  const impTop = cc.improve.filter((t) => t.key !== "other").slice(0, 3).map((t) => t.name);
+
+  num.sec++;
+  const s = num.sec;
+  let html = secHeadHtml(s, "บทสรุปผลการประเมินสำหรับผู้บริหาร");
+
+  let p1 = `ผลการประเมินสะท้อนว่า${allOk ? "โครงการสามารถดำเนินงานได้ตามเป้าหมาย โดยผลการประเมินทุกด้านผ่านเกณฑ์ที่กำหนด" : `โครงการผ่านเกณฑ์ความสำเร็จ ${passCount} จากทั้งหมด ${groupCount} ด้าน`} มีผู้ตอบแบบประเมินรวม ${totalResp} คน${allInfos._bases > 1 ? ` จากผู้ประเมิน ${allInfos._bases} กลุ่ม` : ""} ค่าเฉลี่ยรายด้านอยู่ระหว่าง ${f2(mn)} ถึง ${f2(mx)} คะแนน จุดแข็งสำคัญคือ${esc(top.g.name)} (x̄ = ${f2(top.g.total.mean)} ระดับ${levelLabel(top.g.total.mean)}) ขณะที่ด้านที่มีค่าเฉลี่ยต่ำกว่าด้านอื่นคือ${esc(low.g.name)} (x̄ = ${f2(low.g.total.mean)})${low.g.total.mean >= pm ? ` แม้ยังผ่านเกณฑ์และอยู่ในระดับ${levelLabel(low.g.total.mean)} จึงถือเป็นประเด็นที่มีโอกาสพัฒนา` : " ซึ่งไม่ผ่านเกณฑ์และควรได้รับการปรับปรุง"}`;
+  if (okSdg.length) p1 += ` นอกจากนี้ ผู้ตอบรับรู้ว่าโครงการสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน ${okSdg.length} จาก ${allSdgs.length} เป้าหมายที่ประเมิน`;
+  html += wp(p1);
+  if (impTop.length) {
+    html += wp(`เมื่อพิจารณาร่วมกับความคิดเห็นปลายเปิด พบว่าประเด็นที่ควรให้ความสำคัญในการจัดโครงการครั้งต่อไป ได้แก่ ${joinThai(impTop)} (รายละเอียดในส่วนการวิเคราะห์ความคิดเห็นและข้อเสนอแนะ)`);
+  }
+  html += wp(`<b>ข้อสรุป: ${allOk ? "โครงการบรรลุผลตามเกณฑ์การประเมินที่กำหนด" : passCount ? "โครงการบรรลุผลตามเกณฑ์เป็นบางส่วน" : "โครงการยังไม่บรรลุผลตามเกณฑ์ที่กำหนด"}</b> (เกณฑ์ความสำเร็จ: ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ผ่าน ${passCount}/${groupCount} ด้าน)`, { indent: false, align: "left" });
+
+  // ตารางสรุปรายด้าน แยกกลุ่มฐานด้วยแถวหัวเรื่อง — ไม่ปนฐานโดยไม่บอก และไม่เขียน n ซ้ำทุกแถว
+  num.table++;
+  html += wCaption(num.table, `สรุปผลการประเมินรายด้านตามเกณฑ์ความสำเร็จ (ค่าเฉลี่ย ≥ ${pm.toFixed(2)}) จำแนกตามฐานผู้ประเมิน`);
+  const trs = [];
+  datasets.forEach((ds, di) => {
+    groupBases(ds.rows, ds.analysis.groups, ds.columns).forEach((b) => {
+      trs.push([cell(`<b>ฐานผู้ประเมิน: ${esc(b.whoText)}${multi ? ` — ${esc(ds.label)}` : ""}</b>`, "left", true, 5)]);
+      [...b.list].sort((x, y) => y.g.total.mean - x.g.total.mean).forEach((x) => {
+        trs.push([
+          cell(esc(x.g.name), "left"),
+          cell(f2(x.g.total.mean)), cell(f2(x.g.total.sd)),
+          cell(levelLabel(x.g.total.mean)),
+          cell(x.g.total.mean >= pm ? "ผ่าน" : "ไม่ผ่าน", "center", x.g.total.mean < pm),
+        ]);
+      });
+    });
+  });
+  trs.push([cell("ค่าเฉลี่ยของผลการประเมินรายด้าน", "center", true), cell(f2(meanOfMeans), "center", true), cell("—", "center", true), cell(levelLabel(meanOfMeans), "center", true), cell(meanOfMeans >= pm ? "ผ่าน" : "ไม่ผ่าน", "center", true)]);
+  html += wTable(["ด้านการประเมิน", "x̄", "S.D.", "ระดับผล", "ผลตามเกณฑ์"], trs);
+  html += `<p style="${W_P}text-align:left;margin:2pt 0 0 0;font-size:14pt;color:#333;">หมายเหตุ: ค่าเฉลี่ยของผลการประเมินรายด้านคำนวณจากค่าเฉลี่ยรายด้านโดยไม่ถ่วงน้ำหนัก แต่ละด้านมีจำนวนผู้ตอบแตกต่างกัน จึงใช้เพื่อสรุปภาพรวมเชิงพรรณนาเท่านั้น</p>`;
+  return { title: `ส่วนที่ ${s} บทสรุปสำหรับผู้บริหาร`, html };
+}
+
+/** ผลการประเมินของชุดข้อมูลหนึ่งชุด — ส่วนผลรายฐาน / วัตถุประสงค์ / SDGs / ความคิดเห็น / ข้อเสนอแนะ + ภาคผนวก */
 function datasetBlocks(ds, num, rk) {
   const rows = ds.rows;
   const columns = ds.columns;
-  const { groups: dsGroups, overall: dsOverall, sdgs: dsSdgs } = ds.analysis;
+  const { groups, sdgs } = ds.analysis;
+  const pm = passMark();
   const blocks = [];
-  let tableNo = num.table, chartNo = num.chart;
+  const appendix = [];
+  const bases = groupBases(rows, groups, columns);
+  const cc = codeComments(rows, columns);
 
-  // ---------- ตอนที่ 1 ข้อมูลทั่วไป ----------
-  const catCols = columns.filter((c) => c.type === "categorical" && !c.mergeInto && !c.noReport);
-  const catBlocksHtml = [];
+  // ---------- ส่วนผลการประเมินรายฐานผู้ประเมิน ----------
+  bases.forEach((b) => {
+    num.sec++;
+    const s = num.sec;
+    let html = secHeadHtml(s, b.title);
+    html += baseLine(b.whoText);
+
+    // แยก "ผลลัพธ์ที่เกิดกับผู้เข้าร่วม" ออกจาก "ความพึงพอใจต่อการจัดกิจกรรม" (เฉพาะฐานหลัก)
+    let satis = b.kind === "main" ? b.list.filter((x) => /พึงพอใจ/.test(x.g.name)) : [];
+    let outcome = b.list.filter((x) => !satis.includes(x));
+    // บางแบบประเมินทุกด้านเป็นความพึงพอใจ — รายงานเป็นผลรายด้านตามปกติ ไม่ต้องแยกหมวดซ้อน
+    if (!outcome.length) { outcome = satis; satis = []; }
+    let sub = 0;
+
+    if (outcome.length) {
+      sub++;
+      num.table++;
+      html += subHeadHtml(`${s}.${sub}  ${b.kind === "main" ? "ผลลัพธ์ที่เกิดกับผู้เข้าร่วมโครงการ" : "ผลการประเมินรายด้าน"}`);
+      const useRank = b.kind === "minor";
+      html += wCaption(num.table, `ค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และระดับผลการประเมิน เรียงตามค่าเฉลี่ยจากมากไปน้อย`);
+      const { sorted, html: tbl } = groupSummaryTable(outcome, pm, { rank: useRank });
+      html += tbl;
+      html += analysisPara(sorted, pm, b.kind === "main" ? "โครงการ" : "การประเมินโดยกลุ่มผู้จัดและบุคลากร");
+      if (b.kind === "minor") {
+        const lowest = sorted[sorted.length - 1];
+        if (lowest && sorted.length > 1) html += wp(`ผู้ประเมินมีความเห็นว่าองค์ประกอบที่ได้รับการพัฒนาชัดเจนที่สุดคือ${esc(sorted[0].g.name)} ส่วน${esc(lowest.g.name)}มีคะแนนต่ำกว่าองค์ประกอบอื่น บ่งชี้ว่าการจัดโครงการครั้งต่อไปอาจเพิ่มกิจกรรมที่ส่งเสริมด้านดังกล่าวให้ชัดเจนขึ้น`);
+      }
+    }
+
+    if (satis.length) {
+      sub++;
+      html += subHeadHtml(`${s}.${sub}  ความพึงพอใจต่อการจัดกิจกรรม`);
+      if (satis.length > 1) {
+        num.table++;
+        html += wCaption(num.table, "ค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และระดับความพึงพอใจรายด้าน เรียงตามค่าเฉลี่ยจากมากไปน้อย");
+        html += groupSummaryTable(satis, pm).html;
+      }
+      // รายข้อความพึงพอใจทั้งหมด (รวมทุกด้านพึงพอใจ) — สรุปเฉพาะภาพรวม + สูงสุด/ต่ำสุด 3 รายการ
+      const items = satis.flatMap((x) => x.g.items.filter((it) => it.stats.n > 0));
+      const pooled = statsFromVals(satis.flatMap((x) => x.g._vals));
+      const si = [...items].sort((a, b2) => b2.stats.mean - a.stats.mean);
+      let t = `ความพึงพอใจต่อการจัดกิจกรรมในภาพรวมอยู่ในระดับ${levelLabel(pooled.mean)} (x̄ = ${f2(pooled.mean)}, S.D. = ${f2(pooled.sd)}) ${pooled.mean >= pm ? "ผ่าน" : "ไม่ผ่าน"}เกณฑ์ความสำเร็จที่กำหนด`;
+      if (si.length > 6) {
+        const top3 = si.slice(0, 3), low3 = si.slice(-3).reverse();
+        t += ` รายการที่ผู้ตอบพึงพอใจสูงสุด 3 อันดับแรก ได้แก่ ${joinThai(top3.map((it) => `${it.label} (x̄ = ${f2(it.stats.mean)})`))} ส่วนรายการที่มีค่าเฉลี่ยต่ำกว่ารายการอื่น ได้แก่ ${joinThai(low3.map((it) => `${it.label} (x̄ = ${f2(it.stats.mean)})`))} รายละเอียดรายข้อปรากฏในภาคผนวก`;
+      }
+      html += wp(t);
+      if (si.length > 1) {
+        const lowIt = si[si.length - 1];
+        html += wp(`ข้อค้นพบนี้บ่งชี้ว่ารายการที่มีค่าเฉลี่ยต่ำกว่ารายการอื่น${lowIt.stats.mean >= pm ? " แม้ยังอยู่ในระดับที่ผ่านเกณฑ์ " : " "}ควรได้รับการพิจารณาเป็นลำดับต้นในการวางแผนจัดกิจกรรมครั้งต่อไป`);
+      }
+    }
+
+    // กราฟที่ 1 ของเล่ม: ค่าเฉลี่ยรายด้านของฐานหลักทั้งหมด (ห้ามรวมข้อมูลต่างฐานในกราฟเดียว)
+    if (state.reportOpts.charts && b.kind === "main" && b.list.length > 1 && num.mainCharts < 1) {
+      num.mainCharts++;
+      num.chart++;
+      const sortedAll = [...b.list].sort((x, y) => y.g.total.mean - x.g.total.mean);
+      const names = sortedAll.map((x) => x.g.name);
+      const gMeans = sortedAll.map((x) => x.g.total.mean);
+      const url = cachedChartURL(`${rk}|${ds.key}|mainbar|${pm}`, () =>
+        chartToDataURL(cfgMeanBar(names, gMeans, themeVars(true), null, { passLine: pm, passLabel: `เกณฑ์ ${pm.toFixed(2)}` }), 860, Math.max(220, names.length * 50 + 70)));
+      html += chartImg(url, num.chart, `ค่าเฉลี่ยผลการประเมินรายด้านจาก${b.title.replace(/^ผลการประเมินจาก/, "")} (n = ${b.n}) เรียงจากมากไปน้อย เส้นประคือเกณฑ์ความสำเร็จ`);
+    }
+    blocks.push({ title: `ส่วนที่ ${s} ${b.title}`, html });
+  });
+
+  // ---------- ส่วนการบรรลุวัตถุประสงค์ของโครงการ ----------
+  const objBlock = objectivesBlock(ds, num, pm, bases);
+  if (objBlock) blocks.push(objBlock);
+
+  // ---------- ส่วน SDGs ----------
+  if (sdgs.length) {
+    num.sec++;
+    const s = num.sec;
+    num.table++;
+    let html = secHeadHtml(s, "ความสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs)");
+    html += wCaption(num.table, "ร้อยละของผู้ตอบที่เห็นว่าโครงการสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน");
+    html += wTable(
+      ["เป้าหมายการพัฒนาที่ยั่งยืน", "เห็นว่าสอดคล้อง (คน)", "ร้อยละ", "ข้อสรุป"],
+      sdgs.map((x) => [cell(esc(x.header), "left"), cell(`${x.agree}/${x.n}`), cell(x.pct.toFixed(2)), cell(x.pct >= 50 ? "สอดคล้อง" : "ไม่สอดคล้อง", "center", x.pct < 50)])
+    );
+    const ok = sdgs.filter((x) => x.pct >= 50);
+    let narr = ok.length
+      ? `ผู้ตอบแบบประเมินส่วนใหญ่รับรู้ว่าโครงการสนับสนุนเป้าหมายการพัฒนาที่ยั่งยืน ${ok.length} จาก ${sdgs.length} เป้าหมายที่ประเมิน ได้แก่ ${joinThai(ok.map((x) => x.short))} ผ่านการดำเนินกิจกรรมและผลลัพธ์ของโครงการ`
+      : `ผู้ตอบแบบประเมินส่วนใหญ่ยังไม่เห็นว่าโครงการสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืนที่ประเมิน`;
+    narr += ` ทั้งนี้ ผลดังกล่าวเป็นการประเมินการรับรู้ของผู้ตอบแบบประเมิน มิใช่การประเมินผลกระทบตามตัวชี้วัด SDGs ระดับประเทศหรือระดับสากล`;
+    html += wp(narr);
+    blocks.push({ title: `ส่วนที่ ${s} SDGs`, html });
+  }
+
+  // ---------- ส่วนการวิเคราะห์ความคิดเห็นปลายเปิด ----------
+  if (cc.total > 0) {
+    num.sec++;
+    const s = num.sec;
+    let html = secHeadHtml(s, "การวิเคราะห์ความคิดเห็นและข้อเสนอแนะปลายเปิด");
+    html += wp(`ความคิดเห็นปลายเปิดมีทั้งสิ้น ${cc.total} รายการ เป็นความคิดเห็นที่มีสาระต่อการวิเคราะห์ ${cc.substantive} รายการ (ตัดคำตอบที่ไม่มีสาระ เช่น "ไม่มี" ออก ${cc.dropped} รายการ) ผู้จัดทำได้จัดกลุ่มความคิดเห็นเป็นประเด็น (Theme) โดยความคิดเห็นหนึ่งรายการอาจถูกนับในหลายประเด็นหากกล่าวถึงหลายเรื่อง ดังนี้`);
+    const themeTable = (list, capt) => {
+      if (!list.length) return "";
+      num.table++;
+      let h = wCaption(num.table, capt);
+      h += wTable(
+        ["ประเด็น (Theme)", "จำนวนความคิดเห็น", "ความคิดเห็นตัวแทน"],
+        list.map((t) => [cell(esc(t.name), "left"), cell(String(t.count)), cell(t.samples.length ? t.samples.map((x) => `“${esc(x)}”`).join("<br>") : "—", "left")])
+      );
+      return h;
+    };
+    html += themeTable(cc.like,"ประเด็นที่ผู้เข้าร่วมชื่นชอบ จากความคิดเห็นปลายเปิด");
+    html += themeTable(cc.improve, "ประเด็นที่ผู้เข้าร่วมเห็นว่าควรปรับปรุง จากความคิดเห็นปลายเปิด");
+
+    // กราฟที่ 2 ของเล่ม: จำนวนความคิดเห็นตามประเด็นที่ควรปรับปรุง (เมื่อนับได้เป็นระบบ)
+    const impReal = cc.improve.filter((t) => t.key !== "other");
+    if (state.reportOpts.charts && impReal.length >= 3 && num.mainCharts < 2) {
+      num.mainCharts++;
+      num.chart++;
+      const url = cachedChartURL(`${rk}|${ds.key}|themes`, () =>
+        chartToDataURL(cfgCountBar(impReal.map((t) => t.name), impReal.map((t) => t.count), themeVars(true), { endLabels: impReal.map((t) => String(t.count)) }), 860, Math.max(180, impReal.length * 48 + 60)));
+      html += chartImg(url, num.chart, "จำนวนความคิดเห็นปลายเปิด จำแนกตามประเด็นที่ควรปรับปรุง");
+    }
+
+    // สรุปเชิงวิเคราะห์: เชื่อมความเห็นกับผลเชิงปริมาณ
+    const allSorted = bases.flatMap((b) => b.list).sort((a, b2) => a.g.total.mean - b2.g.total.mean);
+    const lowG = allSorted[0];
+    if (impReal.length && lowG) {
+      html += wp(`เมื่อพิจารณาร่วมกับผลเชิงปริมาณ พบว่าประเด็นที่ถูกกล่าวถึงมากในความคิดเห็นปลายเปิด ได้แก่ ${joinThai(impReal.slice(0, 3).map((t) => t.name))} สอดคล้องกับด้านที่มีค่าเฉลี่ยต่ำกว่าด้านอื่นคือ${esc(lowG.g.name)} (x̄ = ${f2(lowG.g.total.mean)}) จึงควรให้ความสำคัญกับการบริหารจัดการด้านดังกล่าวในการจัดโครงการครั้งต่อไป`);
+    }
+    blocks.push({ title: `ส่วนที่ ${s} วิเคราะห์ความคิดเห็นปลายเปิด`, html });
+  }
+
+  // ---------- ส่วนข้อเสนอแนะเพื่อการพัฒนาโครงการครั้งต่อไป ----------
+  const recBlock = recommendationsBlock(ds, num, pm, bases, cc);
+  if (recBlock) blocks.push(recBlock);
+
+  // ---------- ภาคผนวก ----------
+  appendix.push(...appendixBlocks(ds, num, rk, bases));
+
+  return { blocks, appendix };
+}
+
+/** ส่วนการบรรลุวัตถุประสงค์ — จับคู่วัตถุประสงค์ (ผู้ใช้กรอก) กับด้านการประเมิน */
+function objectivesBlock(ds, num, pm, bases) {
+  const objText = String(state.reportOpts.objectives || "").trim();
+  const allG = bases.flatMap((b) => b.list);
+  if (!objText) {
+    if (allG.length) addTodo("ยังไม่ได้กรอกวัตถุประสงค์โครงการ — ส่วน “การบรรลุวัตถุประสงค์” จะยังไม่ปรากฏในเอกสาร (กรอกในช่องด้านซ้าย)");
+    return null;
+  }
+  const lines = objText.split("\n").map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  num.sec++;
+  const s = num.sec;
+  num.table++;
+  let html = secHeadHtml(s, "การบรรลุวัตถุประสงค์ของโครงการ");
+  html += wp(`ผู้จัดทำนำวัตถุประสงค์ของโครงการมาเชื่อมโยงกับผลการประเมินด้านที่เกี่ยวข้องโดยตรง โดยถือเกณฑ์ความสำเร็จที่ค่าเฉลี่ยตั้งแต่ ${pm.toFixed(2)} ขึ้นไป ดังตารางที่ ${num.table}`);
+  html += wCaption(num.table, "การบรรลุวัตถุประสงค์ของโครงการ เทียบกับตัวชี้วัดจากผลการประเมิน");
+  let reached = 0, unresolved = 0;
+  const trows = lines.map((line) => {
+    const [obj, indPart] = line.split("|").map((x) => (x || "").trim());
+    let matched = [];
+    if (indPart) {
+      const wants = indPart.split(",").map((x) => x.trim()).filter(Boolean);
+      matched = allG.filter((x) => wants.some((w) => x.g.name.includes(w) || w.includes(x.g.name)));
+    }
+    if (!matched.length && indPart) addTodo(`วัตถุประสงค์ “${obj.slice(0, 40)}…” ระบุด้าน “${indPart}” แต่จับคู่กับด้านการประเมินไม่ได้ — ตรวจชื่อด้านให้ตรง`);
+    if (!matched.length) {
+      unresolved++;
+      return [cell(esc(obj), "left"), cell("—", "left"), cell("—"), cell(`≥ ${pm.toFixed(2)}`), cell("ข้อมูลไม่เพียงพอสำหรับสรุป", "center", true)];
+    }
+    const meanM = matched.reduce((a, x) => a + x.g.total.mean, 0) / matched.length;
+    const ok = meanM >= pm;
+    if (ok) reached++;
+    return [
+      cell(esc(obj), "left"),
+      cell(esc(matched.map((x) => x.g.name).join(", ")), "left"),
+      cell(f2(meanM)),
+      cell(`≥ ${pm.toFixed(2)}`),
+      cell(ok ? "บรรลุ" : "ไม่บรรลุ", "center", !ok),
+    ];
+  });
+  html += wTable(["วัตถุประสงค์โครงการ", "ตัวชี้วัดที่ใช้พิจารณา (ด้านการประเมิน)", "ผลการประเมิน (x̄)", "เกณฑ์", "ข้อสรุป"], trows);
+  const evaluable = lines.length - unresolved;
+  let concl;
+  if (!evaluable) concl = "วัตถุประสงค์ทุกข้อยังไม่มีตัวชี้วัดจากแบบประเมินรองรับ จึงไม่สามารถยืนยันการบรรลุวัตถุประสงค์จากข้อมูลชุดนี้ได้";
+  else if (reached === lines.length) concl = "โครงการบรรลุวัตถุประสงค์ครบทุกข้อตามเกณฑ์ที่กำหนด";
+  else if (reached === evaluable) concl = `โครงการบรรลุวัตถุประสงค์ที่มีตัวชี้วัดรองรับทั้ง ${evaluable} ข้อ${unresolved ? ` ส่วนอีก ${unresolved} ข้อมีข้อมูลไม่เพียงพอสำหรับสรุป` : ""}`;
+  else concl = `โครงการบรรลุวัตถุประสงค์ ${reached} จาก ${evaluable} ข้อที่มีตัวชี้วัดรองรับ${unresolved ? ` และอีก ${unresolved} ข้อมีข้อมูลไม่เพียงพอสำหรับสรุป` : ""}`;
+  html += wp(`จากตารางที่ ${num.table} สรุปได้ว่า ${concl}`);
+  return { title: `ส่วนที่ ${s} การบรรลุวัตถุประสงค์`, html };
+}
+
+/** ส่วนข้อเสนอแนะเพื่อการพัฒนา — แปลงประเด็นจากความคิดเห็น + ด้านคะแนนต่ำ เป็นแนวทางปฏิบัติ */
+function recommendationsBlock(ds, num, pm, bases, cc) {
+  const impReal = cc.improve.filter((t) => t.key !== "other" && t.fix);
+  const allSorted = bases.flatMap((b) => b.list).sort((a, b2) => a.g.total.mean - b2.g.total.mean);
+  const failed = allSorted.filter((x) => x.g.total.mean < pm);
+  if (!impReal.length && !failed.length) return null;
+  num.sec++;
+  const s = num.sec;
+  num.table++;
+  let html = secHeadHtml(s, "ข้อเสนอแนะเพื่อการพัฒนาโครงการครั้งต่อไป");
+  html += wp(`ผู้จัดทำแปลงข้อค้นพบจากผลการประเมินและความคิดเห็นปลายเปิดเป็นแนวทางที่นำไปปฏิบัติได้ ดังตารางที่ ${num.table}`);
+  html += wCaption(num.table, "ข้อเสนอแนะเพื่อการพัฒนาการจัดโครงการครั้งต่อไป");
+  const trows = [];
+  impReal.slice(0, 6).forEach((t) => {
+    trows.push([
+      cell(esc(t.name), "left"),
+      cell(`ความคิดเห็นปลายเปิด ${t.count} รายการ`, "left"),
+      cell(esc(t.fix), "left"),
+      cell(esc(t.own), "left"),
+      cell(esc(t.when), "left"),
+    ]);
+  });
+  failed.forEach((x) => {
+    trows.push([
+      cell(esc(x.g.name), "left"),
+      cell(`ค่าเฉลี่ย ${f2(x.g.total.mean)} ต่ำกว่าเกณฑ์ ${pm.toFixed(2)}`, "left"),
+      cell(`ทบทวนการออกแบบกิจกรรมที่เกี่ยวข้องกับ${esc(x.g.name)} โดยวิเคราะห์รายข้อที่มีค่าเฉลี่ยต่ำในภาคผนวกร่วมกับความคิดเห็นปลายเปิด และกำหนดผู้รับผิดชอบติดตามผลในการจัดครั้งต่อไป`, "left"),
+      cell("คณะกรรมการโครงการ", "left"),
+      cell("ก่อนโครงการครั้งต่อไป", "left"),
+    ]);
+  });
+  html += wTable(["ประเด็นที่พบ", "หลักฐานจากผลประเมิน", "แนวทางปรับปรุง", "ผู้รับผิดชอบที่เกี่ยวข้อง", "ช่วงเวลาดำเนินการ"], trows);
+  html += wp(`ข้อเสนอแนะข้างต้นอ้างอิงจากหลักฐานที่ปรากฏในผลการประเมินครั้งนี้ ผู้รับผิดชอบโครงการควรนำไปพิจารณาร่วมกับข้อจำกัดด้านงบประมาณและบุคลากรในการวางแผนครั้งต่อไป`);
+  return { title: `ส่วนที่ ${s} ข้อเสนอแนะเพื่อการพัฒนา`, html };
+}
+
+/** ภาคผนวก: ก. ตารางรายข้อทุกด้าน (พร้อมกราฟถ้าเลือก) · ข. ข้อมูลทั่วไปโดยละเอียด · ค. ความคิดเห็นฉบับเต็ม */
+function appendixBlocks(ds, num, rk, bases) {
+  const rows = ds.rows, columns = ds.columns;
+  const out = [];
+  const withFreq = state.reportOpts.freq;
+  const style = state.reportOpts.chartStyle || "summary";
+
+  // ก. ตารางรายข้อทุกด้าน (เรียงตามฐาน → ค่าเฉลี่ยด้าน)
+  const ordered = bases.flatMap((b) => [...b.list].sort((x, y) => y.g.total.mean - x.g.total.mean).map((x) => ({ ...x, base: b })));
+  if (ordered.length) {
+    let html = subHeadHtml("ภาคผนวก ก  ผลการประเมินรายข้อ");
+    ordered.forEach((x) => {
+      const g = x.g;
+      const rItems = g.items.filter((it) => it.stats.n > 0);
+      if (!rItems.length) return;
+      num.appTable++;
+      const head = withFreq
+        ? ["รายการประเมิน", "5", "4", "3", "2", "1", "x̄", "S.D.", "ระดับผล"]
+        : ["รายการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"];
+      const body = rItems.map((it) => {
+        const st = it.stats;
+        const base = [cell(esc(it.label), "left")];
+        if (withFreq) [5, 4, 3, 2, 1].forEach((lv) => base.push(cell(`${st.freq[lv]}<br>(${st.n ? ((st.freq[lv] / st.n) * 100).toFixed(1) : "0.0"})`)));
+        base.push(cell(f2(st.mean)), cell(f2(st.sd)), cell(levelLabel(st.mean)));
+        return base;
+      });
+      const totalRow = [cell("รวม", "center", true)];
+      if (withFreq) [5, 4, 3, 2, 1].forEach(() => totalRow.push(cell("")));
+      totalRow.push(cell(f2(g.total.mean), "center", true), cell(f2(g.total.sd), "center", true), cell(levelLabel(g.total.mean), "center", true));
+      body.push(totalRow);
+      html += wAppCaption(num.appTable, `${g.name}${withFreq ? " (ค่าในวงเล็บคือร้อยละ)" : ""}`);
+      html += `<p style="${W_P}text-align:left;margin:0 0 4pt 0;font-size:14pt;color:#333;">ฐานผู้ประเมิน: ${esc(x.who.text)}</p>`;
+      html += wTable(head, body);
+      if (state.reportOpts.charts && (style === "mean" || style === "both")) {
+        num.appChart++;
+        const url = cachedChartURL(`${rk}|${ds.key}|grpM|` + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
+        html += chartImg(url, num.appChart, `ค่าเฉลี่ยรายข้อ ${g.name}`, true);
+      }
+      if (state.reportOpts.charts && (style === "likert" || style === "both")) {
+        num.appChart++;
+        const url = cachedChartURL(`${rk}|${ds.key}|grpL|` + g.name, () => chartToDataURL(cfgLikert(rItems, themeVars(true)), 860, Math.max(260, rItems.length * 58 + 120)));
+        html += chartImg(url, num.appChart, `ร้อยละการกระจายระดับคะแนน ${g.name}`, true);
+      }
+    });
+    out.push({ title: "ภาคผนวก ก ผลรายข้อ", html });
+  }
+
+  // ข. ข้อมูลทั่วไปของผู้ตอบโดยละเอียด (คอลัมน์ categorical อื่นนอกจากสถานะที่สรุปไว้ในส่วนที่ 1)
+  const statusIdx = columns.findIndex((c) => c.type === "categorical" && /สถานะ/.test(c.header));
+  const catCols = columns.filter((c) => c.type === "categorical" && !c.mergeInto && !c.noReport && c.i !== statusIdx);
+  const catHtml = [];
   catCols.forEach((c) => {
     const { entries, total } = catFreq(rows, c.i, columns);
     if (!entries.length) return;
-    tableNo++;
-    let html = wCaption(tableNo, `จำนวนและร้อยละของผู้ตอบแบบสอบถาม จำแนกตาม${c.header}`);
-    html += wTable(
+    num.appTable++;
+    let h = wAppCaption(num.appTable, `จำนวนและร้อยละของผู้ตอบแบบสอบถาม จำแนกตาม${c.header}`);
+    h += wTable(
       [esc(c.header), "จำนวน (คน)", "ร้อยละ"],
       [
         ...entries.map((e) => [cell(esc(e.label), "left"), cell(String(e.n)), cell(e.pct.toFixed(2))]),
         [cell("รวม", "center", true), cell(String(total), "center", true), cell("100.00", "center", true)],
       ]
     );
-    let narr = `จากตารางที่ ${tableNo} พบว่า ผู้ตอบแบบสอบถามส่วนใหญ่เป็น${esc(entries[0].label)} จำนวน ${entries[0].n} คน คิดเป็นร้อยละ ${entries[0].pct.toFixed(2)}`;
-    if (entries.length > 2) narr += ` รองลงมาคือ${esc(entries[1].label)} จำนวน ${entries[1].n} คน คิดเป็นร้อยละ ${entries[1].pct.toFixed(2)} และน้อยที่สุดคือ${esc(entries[entries.length - 1].label)} จำนวน ${entries[entries.length - 1].n} คน คิดเป็นร้อยละ ${entries[entries.length - 1].pct.toFixed(2)} ตามลำดับ`;
-    else if (entries.length === 2) narr += ` และ${esc(entries[1].label)} จำนวน ${entries[1].n} คน คิดเป็นร้อยละ ${entries[1].pct.toFixed(2)}`;
-    html += wp(narr);
-    catBlocksHtml.push(html);
+    catHtml.push(h);
   });
-  if (catBlocksHtml.length) {
-    blocks.push({
-      title: "ตอนที่ 1 ข้อมูลทั่วไปของผู้ตอบแบบสอบถาม",
-      html: wp("<b>ตอนที่ 1  ข้อมูลทั่วไปของผู้ตอบแบบสอบถาม</b>", { indent: false, align: "left" }) + catBlocksHtml.join(""),
-    });
+  if (catHtml.length) {
+    out.push({ title: "ภาคผนวก ข ข้อมูลทั่วไป", html: subHeadHtml("ภาคผนวก ข  ข้อมูลทั่วไปของผู้ตอบแบบประเมินโดยละเอียด") + catHtml.join("") });
   }
 
-  // ---------- ตอนที่ 2 ผลการประเมิน ----------
-  const groups = dsGroups;
-  if (groups.length) {
-    const partHtml = [wp("<b>ตอนที่ 2  ผลการประเมินรายด้าน (รายละเอียด)</b>", { indent: false, align: "left" })];
-
-    // จัดหมวดด้านให้อ่านเป็นกลุ่ม: มาตรฐานกลาง → ตามประเภทโครงการ → เฉพาะโครงการ
-    const byCat = { core: [], type: [], custom: [] };
-    groups.forEach((g) => byCat[classifyGroup(g.name)].push(g));
-    const usedCats = ["core", "type", "custom"].filter((c) => byCat[c].length);
-    let subNo = 0;
-    const orderedGroups = [];
-    usedCats.forEach((cat) => {
-      if (usedCats.length > 1) {
-        subNo++;
-        orderedGroups.push({ _catHeader: `2.${subNo}  ${GROUP_CAT_LABEL[cat]}` });
-      }
-      byCat[cat].forEach((g) => orderedGroups.push(g));
-    });
-
-    orderedGroups.forEach((g) => {
-      if (g._catHeader) {
-        partHtml.push(wp(`<b>${esc(g._catHeader)}</b>`, { indent: false, align: "left" }));
-        return;
-      }
-      tableNo++;
-      const withFreq = state.reportOpts.freq;
-      const rItems = g.items.filter((it) => it.stats.n > 0); // ตัดข้อที่ไม่มีผู้ตอบออกจากรายงาน
-      const head = withFreq
-        ? ["รายการประเมิน", "5", "4", "3", "2", "1", "x̄", "S.D.", "ระดับผล"]
-        : ["รายการประเมิน", "x̄", "S.D.", "ระดับผลการประเมิน"];
-      const body = rItems.map((it) => {
-        const s = it.stats;
-        const base = [cell(esc(it.label), "left")];
-        if (withFreq) [5, 4, 3, 2, 1].forEach((lv) => base.push(cell(`${s.freq[lv]}<br>(${s.n ? ((s.freq[lv] / s.n) * 100).toFixed(1) : "0.0"})`)));
-        base.push(cell(f2(s.mean)), cell(f2(s.sd)), cell(levelLabel(s.mean)));
-        return base;
-      });
-      const totalRow = [cell("รวม", "center", true)];
-      if (withFreq) totalRow.push(cell(""), cell(""), cell(""), cell(""), cell(""));
-      totalRow.push(cell(f2(g.total.mean), "center", true), cell(f2(g.total.sd), "center", true), cell(levelLabel(g.total.mean), "center", true));
-      body.push(totalRow);
-
-      const who = respondentsOfGroup(rows, g, columns);
-      let html = wCaption(tableNo, `ค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และระดับผลการประเมิน ${g.name}${withFreq ? " (ค่าในวงเล็บคือร้อยละ)" : ""}`);
-      html += `<p style="${W_P}text-align:left;margin:0 0 4pt 0;font-size:14pt;color:#333;">ผู้ประเมิน: ${esc(who.text)}</p>`;
-      html += wTable(head, body);
-
-      const valid = rItems;
-      const best = valid.reduce((a, b) => (b.stats.mean > a.stats.mean ? b : a), valid[0]);
-      const worst = valid.reduce((a, b) => (b.stats.mean < a.stats.mean ? b : a), valid[0]);
-      const gPm = passMark();
-      let narr = `จากตารางที่ ${tableNo} พบว่า ผลการประเมิน${esc(g.name)}ในภาพรวมอยู่ในระดับ${levelLabel(g.total.mean)} (x̄ = ${f2(g.total.mean)}, S.D. = ${f2(g.total.sd)}) ${g.total.mean >= gPm ? "ผ่าน" : "ไม่ผ่าน"}เกณฑ์ความสำเร็จที่กำหนด (≥ ${gPm.toFixed(2)})`;
-      if (valid.length > 1) narr += ` เมื่อพิจารณาเป็นรายข้อ พบว่า ข้อที่มีค่าเฉลี่ยสูงสุด คือ ${esc(best.label)} (x̄ = ${f2(best.stats.mean)}, S.D. = ${f2(best.stats.sd)}) และข้อที่มีค่าเฉลี่ยต่ำสุด คือ ${esc(worst.label)} (x̄ = ${f2(worst.stats.mean)}, S.D. = ${f2(worst.stats.sd)})`;
-      html += wp(narr);
-
-      if (state.reportOpts.charts) {
-        const style = state.reportOpts.chartStyle || "mean";
-        if (style === "mean" || style === "both") {
-          chartNo++;
-          const url = cachedChartURL(`${rk}|${ds.key}|grpM|` + g.name, () => chartToDataURL(cfgMeanBar(rItems.map((it) => it.label), rItems.map((it) => it.stats.mean), themeVars(true)), 860, Math.max(220, rItems.length * 56 + 60)));
-          html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-          html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ค่าเฉลี่ยผลการประเมิน${esc(g.name)}</p>`;
-        }
-        if (style === "likert" || style === "both") {
-          chartNo++;
-          const url = cachedChartURL(`${rk}|${ds.key}|grpL|` + g.name, () => chartToDataURL(cfgLikert(rItems, themeVars(true)), 860, Math.max(260, rItems.length * 58 + 120)));
-          html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-          html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ร้อยละการกระจายระดับคะแนน${esc(g.name)}</p>`;
-        }
-      }
-      partHtml.push(html);
-    });
-
-    // (ตารางสรุปรวมย้ายไปอยู่บทสรุปสำหรับผู้บริหารด้านหน้าแล้ว)
-    blocks.push({ title: "ตอนที่ 2 ผลการประเมินโครงการ", html: partHtml.join("") });
-  }
-
-  // ---------- ตอนที่ 3 SDGs ----------
-  const sdgs = dsSdgs;
-  if (sdgs.length) {
-    tableNo++;
-    let html = wp("<b>ตอนที่ 3  ความสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs)</b>", { indent: false, align: "left" });
-    html += wCaption(tableNo, "จำนวน ร้อยละ และผลการประเมินความสอดคล้องของโครงการกับเป้าหมายการพัฒนาที่ยั่งยืน (SDGs)");
-    html += wTable(
-      ["เป้าหมายการพัฒนาที่ยั่งยืน", "สอดคล้อง / บรรลุ (คน)", "ไม่สอดคล้อง (คน)", "ร้อยละที่สอดคล้อง", "ผลการประเมิน"],
-      sdgs.map((s) => [cell(esc(s.header), "left"), cell(String(s.agree)), cell(String(s.disagree)), cell(s.pct.toFixed(2)), cell(s.pct >= 50 ? "สอดคล้อง" : "ไม่สอดคล้อง")])
-    );
-    const ok = sdgs.filter((s) => s.pct >= 50);
-    const top = [...sdgs].sort((a, b) => b.pct - a.pct)[0];
-    let narr = `จากตารางที่ ${tableNo} พบว่า ผู้ตอบแบบสอบถามประเมินว่าโครงการมีความสอดคล้องกับเป้าหมายการพัฒนาที่ยั่งยืน จำนวน ${ok.length} เป้าหมาย`;
-    if (ok.length) narr += ` ได้แก่ ${ok.map((s) => esc(s.short)).join(", ")} โดยเป้าหมายที่มีความสอดคล้องสูงสุด คือ ${esc(top.header)} คิดเป็นร้อยละ ${top.pct.toFixed(2)}`;
-    html += wp(narr);
-    if (state.reportOpts.charts) {
-      chartNo++;
-      const url = cachedChartURL(`${rk}|${ds.key}|sdg`, () => {
-        const c = cfgCountBar(sdgs.map((s) => s.label), sdgs.map((s) => +s.pct.toFixed(1)), themeVars(true), { max: 100, suffix: "%", endLabels: sdgs.map((s) => s.pct.toFixed(1) + "%") });
-        return chartToDataURL(c, 860, Math.max(200, sdgs.length * 52 + 60));
-      });
-      html += `<p style="${W_P}text-align:center;margin-top:10pt;"><img src="${url}" style="width:100%;max-width:15.5cm;" alt=""></p>`;
-      html += `<p style="${W_P}text-align:center;margin-top:0;"><b>แผนภูมิที่ ${chartNo}</b>&nbsp;&nbsp;ร้อยละความสอดคล้องของโครงการกับ SDGs</p>`;
-    }
-    blocks.push({ title: "ตอนที่ 3 SDGs", html });
-  }
-
-  // ---------- ตอนที่ 4 ข้อเสนอแนะ ----------
+  // ค. ความคิดเห็นปลายเปิดฉบับเต็ม
   const textCols = columns.filter((c) => c.type === "text" && !c.noReport);
   const textHtml = [];
   textCols.forEach((c) => {
     const answers = textAnswers(rows, c.i);
     if (!answers.length) return;
-    let html = wp(`<b>${esc(c.header)}</b> (ผู้ตอบ ${answers.reduce((a, x) => a + x.n, 0)} คน)`, { indent: false, align: "left" });
-    html += answers.map((a) => wp(`– ${esc(a.text)}${a.n > 1 ? ` (จำนวน ${a.n} คน)` : ""}`, { indent: false, align: "left" })).join("");
-    textHtml.push(html);
+    let h = wp(`<b>${esc(c.header)}</b> (ผู้ตอบ ${answers.reduce((a, x) => a + x.n, 0)} คน)`, { indent: false, align: "left" });
+    h += answers.map((a) => wp(`– ${esc(a.text)}${a.n > 1 ? ` (จำนวน ${a.n} คน)` : ""}`, { indent: false, align: "left" })).join("");
+    textHtml.push(h);
   });
   if (textHtml.length) {
-    blocks.push({
-      title: "ตอนที่ 4 ข้อเสนอแนะ",
-      html: wp("<b>ตอนที่ 4  ข้อเสนอแนะเพิ่มเติม</b>", { indent: false, align: "left" }) + textHtml.join(""),
-    });
+    out.push({ title: "ภาคผนวก ค ความคิดเห็นฉบับเต็ม", html: subHeadHtml("ภาคผนวก ค  ความคิดเห็นและข้อเสนอแนะปลายเปิดฉบับเต็ม") + textHtml.join("") });
   }
-
-  num.table = tableNo;
-  num.chart = chartNo;
-  return blocks;
+  return out;
 }
 
 function renderReport(panel, rows) {
@@ -2176,19 +2635,23 @@ function renderReport(panel, rows) {
           <input type="text" id="projName" placeholder="เช่น ค่ายวิศวฯ สานฝันสู่ชนบท ครั้งที่ 12" value="${esc(state.projectName)}"></label>
         <label class="rp-field"><span>เกณฑ์ความสำเร็จ (ค่าเฉลี่ยตั้งแต่)</span>
           <input type="number" id="passMarkInput" step="0.01" min="1" max="5" value="${passMark().toFixed(2)}"></label>
-        <label class="rp-field"><span>รูปแบบกราฟในเอกสาร</span>
+        <label class="rp-field"><span>วัตถุประสงค์โครงการ — บรรทัดละ 1 ข้อ (พิมพ์ | ตามด้วยชื่อด้านที่ใช้วัด คั่นหลายด้านด้วย , )</span>
+          <textarea id="objInput" rows="4" placeholder="เช่น เพื่อเสริมสร้างความสัมพันธ์ระหว่างนักศึกษาใหม่ | ด้านการสร้างความสัมพันธ์">${esc(state.reportOpts.objectives || "")}</textarea></label>
+        <label class="rp-field"><span>กราฟในเอกสาร</span>
           <select id="selChartStyle" class="coltype">
-            <option value="summary" ${chartVal === "summary" ? "selected" : ""}>กราฟสรุปรวมแผนภูมิเดียว (แนะนำ)</option>
-            <option value="mean" ${chartVal === "mean" ? "selected" : ""}>+ ค่าเฉลี่ยรายข้อทุกด้าน</option>
-            <option value="likert" ${chartVal === "likert" ? "selected" : ""}>+ การกระจายคะแนนทุกด้าน (%)</option>
-            <option value="both" ${chartVal === "both" ? "selected" : ""}>+ ทั้งสองแบบทุกด้าน</option>
+            <option value="summary" ${chartVal === "summary" ? "selected" : ""}>ตามมาตรฐานรายงาน — ไม่เกิน 2 กราฟ (แนะนำ)</option>
+            <option value="mean" ${chartVal === "mean" ? "selected" : ""}>+ กราฟค่าเฉลี่ยรายข้อ (ในภาคผนวก)</option>
+            <option value="likert" ${chartVal === "likert" ? "selected" : ""}>+ กราฟการกระจายคะแนน (ในภาคผนวก)</option>
+            <option value="both" ${chartVal === "both" ? "selected" : ""}>+ ทั้งสองแบบ (ในภาคผนวก)</option>
             <option value="none" ${chartVal === "none" ? "selected" : ""}>ไม่แนบกราฟเลย</option>
           </select></label>
         <div class="rp-toggles">
-          <label class="rp-switch"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}><span class="sw"></span> แสดงความถี่รายระดับ (5–1) ในตาราง</label>
+          <label class="rp-switch"><input type="checkbox" id="ckAppendix" ${state.reportOpts.appendix ? "checked" : ""}><span class="sw"></span> แนบภาคผนวก (รายข้อ / ข้อมูลผู้ตอบ / ความคิดเห็นฉบับเต็ม)</label>
+          <label class="rp-switch"><input type="checkbox" id="ckFreq" ${state.reportOpts.freq ? "checked" : ""}><span class="sw"></span> แสดงความถี่รายระดับ (5–1) ในตารางรายข้อ</label>
           <label class="rp-switch"><input type="checkbox" id="ckThai" ${state.reportOpts.thaiNum ? "checked" : ""}><span class="sw"></span> ใช้เลขไทยในเอกสาร</label>
         </div>
       </div>
+      <div id="todoBox"></div>
       <div id="combineBox"></div>
       <div class="rp-actions">
         <button class="btn primary" id="btnCopyAll"><i data-lucide="copy"></i> คัดลอกทั้งหมด</button>
@@ -2206,6 +2669,14 @@ function renderReport(panel, rows) {
       <div class="report-scroll"><div class="paper"></div></div>
     </div>`;
   panel.appendChild(layout);
+
+  // การ์ดรายการที่ควรตรวจสอบก่อนใช้เอกสาร (สร้างระหว่าง buildReportBlocks)
+  const todoBox = $("#todoBox", layout);
+  if (_reportTodos.length) {
+    todoBox.className = "rp-card todo-card";
+    todoBox.innerHTML = `<div class="rp-title"><i data-lucide="clipboard-check"></i> ควรตรวจสอบก่อนใช้เอกสาร</div>` +
+      _reportTodos.map((t) => `<p class="todo-item">• ${esc(t)}</p>`).join("");
+  }
 
   const paper = $(".paper", layout);
   blocks.forEach((b, i) => {
@@ -2259,6 +2730,8 @@ function renderReport(panel, rows) {
     state.reportOpts.passMark = Number.isFinite(v) ? Math.min(5, Math.max(1, v)) : 3.51;
     renderActiveTab();
   };
+  $("#objInput").onchange = (e) => { state.reportOpts.objectives = e.target.value; saveSessionSnapshot(); renderActiveTab(); };
+  $("#ckAppendix").onchange = (e) => { state.reportOpts.appendix = e.target.checked; renderActiveTab(); };
   $("#ckFreq").onchange = (e) => { state.reportOpts.freq = e.target.checked; renderActiveTab(); };
   $("#ckThai").onchange = (e) => { state.reportOpts.thaiNum = e.target.checked; renderActiveTab(); };
   $("#btnCopyAll").onclick = () => copyHtmlToClipboard(allHtml());
@@ -2388,6 +2861,7 @@ async function openSession(id) {
   state.mergedIds = new Set(s.mergedIds || []);
   state._preMerge = null;
   state.sessionId = s.id;
+  if (s.reportOpts) state.reportOpts = { ...state.reportOpts, ...s.reportOpts };
   state.reportExtraIds = new Set();
   bumpDataVersion();
 
