@@ -4102,9 +4102,16 @@ function init() {
   if (!THEME_META[savedTheme]) savedTheme = "auto";
   applyTheme(savedTheme);
   $("#btnTheme").onclick = cycleTheme;
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (state.theme === "auto" && !$("#workspace").classList.contains("hidden")) renderActiveTab();
-  });
+  // addListener เป็นทางสำรองของ iOS 13 และเบราว์เซอร์ในแอป (เช่น Facebook) รุ่นเก่า
+  // ที่ยังไม่มี MediaQueryList.addEventListener — ถ้าไม่รองรับต้องไม่ทำให้ทั้งหน้าล้ม
+  try {
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const onSchemeChange = () => {
+      if (state.theme === "auto" && !$("#workspace").classList.contains("hidden")) renderActiveTab();
+    };
+    if (mq.addEventListener) mq.addEventListener("change", onSchemeChange);
+    else if (mq.addListener) mq.addListener(onSchemeChange);
+  } catch { /* เบราว์เซอร์ไม่รองรับการติดตามธีมระบบ — ใช้ธีมที่เลือกไว้ต่อไปได้ */ }
 
   // วาดกราฟใหม่หลังเว็บฟอนต์โหลดเสร็จ — กัน Chart.js วัดขนาดข้อความด้วยฟอนต์สำรองค้างไว้
   if (document.fonts?.ready) {
@@ -4135,4 +4142,18 @@ function init() {
   if (es0 && !es0.classList.contains("hidden")) { es0.classList.remove("anim-page"); void es0.offsetWidth; es0.classList.add("anim-page"); }
   refreshIcons();
 }
-init();
+
+/* เปิดหน้าเว็บไม่ขึ้น = แย่กว่าเปิดขึ้นแล้วบางส่วนใช้ไม่ได้ — ถ้า init ล้ม (เบราว์เซอร์เก่า/
+   เบราว์เซอร์ในแอปที่ปิดพื้นที่จัดเก็บ) ให้บอกสาเหตุบนหน้าจอแทนที่จะปล่อยจอว่าง */
+try {
+  init();
+} catch (e) {
+  console.error("init ล้มเหลว", e);
+  const box = document.createElement("div");
+  box.className = "boot-error";
+  box.innerHTML = `<h2>เปิดระบบไม่สำเร็จบนเบราว์เซอร์นี้</h2>
+    <p>หากเปิดจากลิงก์ในแอป (เช่น Facebook, LINE) ให้กดปุ่ม <b>⋯</b> มุมขวาบน แล้วเลือก
+    <b>“เปิดในเบราว์เซอร์”</b> (Chrome หรือ Safari) แล้วลองใหม่อีกครั้ง</p>
+    <p class="boot-detail">รายละเอียดทางเทคนิค: ${esc(String(e && e.message || e))}</p>`;
+  document.body.prepend(box);
+}
