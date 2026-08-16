@@ -3,6 +3,12 @@
    ============================================================ */
 "use strict";
 
+const { analyzeDataset, isSdgLikeValue, parseRating, statsFromVals } = window.EvalAnalysis;
+const db = window.EvalStorage.createStore({
+  name: "evalAnalyzer", version: 1,
+  stores: [{ name: "sessions", keyPath: "id" }, { name: "users", keyPath: "name" }],
+});
+
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -27,6 +33,25 @@ function toast(msg) {
   toast._t = setTimeout(() => t.classList.remove("show"), 2200);
 }
 
+/* สถานะทำงานสำหรับงานที่อาจใช้เวลา เช่น อ่านไฟล์หรือเตรียมข้อมูล
+   แสดงก่อนส่งงานหนักเข้าคิว เพื่อให้ผู้ใช้รู้ว่าแอปยังทำงานอยู่ */
+function setBusy(message) {
+  let overlay = $("#busyOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "busyOverlay";
+    overlay.className = "busy-overlay";
+    overlay.innerHTML = `<div class="busy-card"><span class="busy-spinner"></span><span class="busy-message"></span></div>`;
+    document.body.appendChild(overlay);
+  }
+  $(".busy-message", overlay).textContent = message;
+  overlay.classList.add("show");
+}
+
+function clearBusy() {
+  $("#busyOverlay")?.classList.remove("show");
+}
+
 /* ---------- เกณฑ์แปลผลค่าเฉลี่ย (แบบมาตรฐานงานประเมินโครงการ) ---------- */
 const CRITERIA_NOTE = "เกณฑ์การแปลผลค่าเฉลี่ย: 4.51–5.00 = มากที่สุด, 3.51–4.50 = มาก, 2.51–3.50 = ปานกลาง, 1.51–2.50 = น้อย, 1.00–1.50 = ควรปรับปรุง";
 function levelLabel(m) {
@@ -40,34 +65,6 @@ function levelLabel(m) {
 const LEVEL_CLASS = { "มากที่สุด": "l5", "มาก": "l4", "ปานกลาง": "l3", "น้อย": "l2", "ควรปรับปรุง": "l1" };
 const levelChip = (m) => `<span class="lv ${LEVEL_CLASS[levelLabel(m)] || ""}">${levelLabel(m)}</span>`;
 const meanBar = (m) => `<span class="meanbar"><i style="width:${Number.isFinite(m) ? (m / 5) * 100 : 0}%"></i></span>`;
-
-/* ---------- แปลงค่าคำตอบเป็นคะแนน 1–5 ---------- */
-const RATING_TEXT = {
-  "มากที่สุด": 5, "ดีมาก": 5, "เห็นด้วยอย่างยิ่ง": 5, "พึงพอใจมากที่สุด": 5,
-  "มาก": 4, "ดี": 4, "เห็นด้วย": 4, "พึงพอใจมาก": 4,
-  "ปานกลาง": 3, "เฉย ๆ": 3, "เฉยๆ": 3, "พอใช้": 3,
-  "น้อย": 2, "ไม่เห็นด้วย": 2, "ควรปรับปรุง": 1, "น้อยที่สุด": 1, "ไม่เห็นด้วยอย่างยิ่ง": 1, "แย่": 1,
-};
-/* เรียงจากคำที่ยาว/เจาะจงก่อน เพราะใช้วิธี "มีคำนี้อยู่ในคำตอบ" (เช่น "มากที่สุด" ต้องมาก่อน "มาก") */
-const RATING_CONTAINS = [
-  ["ไม่เห็นด้วยอย่างยิ่ง", 1], ["เห็นด้วยอย่างยิ่ง", 5], ["ไม่เห็นด้วย", 2], ["เห็นด้วย", 4],
-  ["มากที่สุด", 5], ["น้อยที่สุด", 1], ["ควรปรับปรุง", 1], ["ปรับปรุง", 1],
-  ["ดีมาก", 5], ["ปานกลาง", 3], ["พอใช้", 3], ["มาก", 4], ["น้อย", 2], ["ดี", 4],
-];
-function parseRating(v) {
-  if (v == null || v === "") return null;
-  if (typeof v === "number") return v >= 1 && v <= 5 ? v : null;
-  const s = String(v).trim();
-  if (RATING_TEXT[s] != null) return RATING_TEXT[s];
-  const m = s.match(/^([1-5])(?:\s*[-–.(].*)?$/);
-  if (m) return +m[1];
-  for (const [word, score] of RATING_CONTAINS) if (s.includes(word)) return score;
-  return null;
-}
-
-/* ---------- SDG / คำถามสองค่า (สอดคล้อง–ไม่สอดคล้อง) ---------- */
-const isAgreeValue = (s) => /(สอดคล้อง|บรรลุ)/.test(s) && !/ไม่/.test(s);
-const isSdgLikeValue = (s) => /(สอดคล้อง|บรรลุ)/.test(s);
 
 /* ============================================================
    สถานะหลักของแอป
@@ -251,7 +248,7 @@ function scanRespondTarget(wb, primarySheet, minN = 1) {
   try {
     for (const name of wb.SheetNames) {
       if (name === primarySheet) continue;
-      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", blankrows: false });
+      const aoa = workbookRows(wb, name);
       for (const r of aoa.slice(0, 80)) {
         const label = String(r[0] ?? "");
         if (!/(จำนวน|ยอด|แจก|กลุ่มเป้าหมาย)/.test(label)) continue;
@@ -295,54 +292,10 @@ function cycleTheme() {
    ฐานข้อมูลในเครื่อง (IndexedDB) — ประวัติการวิเคราะห์ + ผู้ใช้งาน
    ============================================================ */
 const RETENTION_DAYS = 15;
-let _db = null;
-function openDb() {
-  if (_db) return Promise.resolve(_db);
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("evalAnalyzer", 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions", { keyPath: "id" });
-      if (!db.objectStoreNames.contains("users")) db.createObjectStore("users", { keyPath: "name" });
-    };
-    req.onsuccess = () => { _db = req.result; resolve(_db); };
-    req.onerror = () => reject(req.error);
-  });
-}
-async function dbPut(store, val) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(store, "readwrite");
-    tx.objectStore(store).put(val);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  });
-}
-async function dbGetAll(store) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(store, "readonly").objectStore(store).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function dbGet(store, key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(store, "readonly").objectStore(store).get(key);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function dbDelete(store, key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(store, "readwrite");
-    tx.objectStore(store).delete(key);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  });
-}
+const dbPut = (store, value) => db.put(store, value);
+const dbGetAll = (store) => db.getAll(store);
+const dbGet = (store, key) => db.get(store, key);
+const dbDelete = (store, key) => db.remove(store, key);
 
 /** ลบประวัติที่เก่ากว่า 15 วันโดยอัตโนมัติ */
 async function purgeOldSessions() {
@@ -385,39 +338,153 @@ async function saveSessionSnapshot() {
    โหลดไฟล์
    ============================================================ */
 function handleFile(file) {
-  if (/\.(evalproj|json)$/i.test(file.name)) {
+  if (/\.(evalproj|evalconfig|json)$/i.test(file.name)) {
+    setBusy("กำลังอ่านไฟล์การตั้งค่า/โครงการ…");
     const r = new FileReader();
-    r.onload = (e) => { try { importProject(JSON.parse(e.target.result), file.name.replace(/\.[^.]+$/, "")); } catch { toast("อ่านไฟล์ตรวจงานไม่สำเร็จ"); } };
+    r.onload = (e) => {
+      try {
+        const obj = JSON.parse(e.target.result);
+        clearBusy();
+        if (obj.kind === "config") importConfig(obj);
+        else importProject(obj, file.name.replace(/\.[^.]+$/, ""));
+      } catch {
+        clearBusy();
+        toast("อ่านไฟล์การตั้งค่าหรือไฟล์ตรวจงานไม่สำเร็จ");
+      }
+    };
+    r.onerror = () => { clearBusy(); toast("อ่านไฟล์ไม่สำเร็จ"); };
     r.readAsText(file);
     return;
   }
+  setBusy("กำลังอ่านไฟล์แบบประเมิน…");
   const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
-      state.workbook = wb;
-      state.fileName = file.name;
-      loadSheet(bestSheet(wb));
-      setupSheetPicker(wb);
-    } catch (err) {
-      console.error(err);
-      toast("อ่านไฟล์ไม่สำเร็จ: " + err.message);
-    }
+  reader.onload = async (e) => {
+    setBusy("กำลังเตรียมตัวอย่างข้อมูล…");
+    // setTimeout ไม่ใช่ requestAnimationFrame — rAF หยุดทำงานเมื่อผู้ใช้สลับไปแท็บอื่นระหว่างรอไฟล์ใหญ่
+    setTimeout(async () => {
+      try {
+        const wb = await readWorkbook(e.target.result);
+        clearBusy();
+        openWorkbookPreview(wb, file.name);
+      } catch (err) {
+        console.error(err);
+        clearBusy();
+        toast("อ่านไฟล์ไม่สำเร็จ: " + err.message);
+      }
+    });
   };
+  reader.onerror = () => { clearBusy(); toast("อ่านไฟล์ไม่สำเร็จ"); };
   reader.readAsArrayBuffer(file);
+}
+
+function workbookFromRows(sheets) {
+  return { SheetNames: Object.keys(sheets), Sheets: {}, _rows: sheets };
+}
+
+function workbookRows(wb, sheetName) {
+  if (wb._rows) return wb._rows[sheetName] || [];
+  return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", raw: true, blankrows: false });
+}
+
+function parseWorkbookInWorker(buffer) {
+  if (!window.Worker) return Promise.reject(new Error("Web Worker not supported"));
+  return new Promise((resolve, reject) => {
+    const worker = new Worker("ingest-worker.js");
+    worker.onmessage = ({ data }) => {
+      worker.terminate();
+      if (data.ok) resolve(workbookFromRows(data.sheets));
+      else reject(new Error(data.message));
+    };
+    worker.onerror = () => { worker.terminate(); reject(new Error("Web Worker failed")); };
+    // Do not transfer the buffer: a direct-parser fallback must retain it if a local Worker is blocked.
+    worker.postMessage(buffer);
+  });
+}
+
+async function readWorkbook(buffer) {
+  try {
+    return await parseWorkbookInWorker(buffer);
+  } catch (error) {
+    console.info("อ่านไฟล์บนหน้าเว็บโดยตรง", error.message);
+    return XLSX.read(buffer, { type: "array", cellDates: true });
+  }
 }
 
 /** เลือกชีตที่มีข้อมูลมากที่สุดโดยอัตโนมัติ (บางไฟล์มีชีตว่าง/ชีตสรุปนำหน้า) */
 function bestSheet(wb) {
   let best = wb.SheetNames[0], bestScore = -1;
   for (const name of wb.SheetNames) {
-    const ws = wb.Sheets[name];
-    if (!ws || !ws["!ref"]) continue;
-    const r = XLSX.utils.decode_range(ws["!ref"]);
-    const score = (r.e.r - r.s.r) * (r.e.c - r.s.c + 1);
+    const score = wb._rows
+      ? workbookRows(wb, name).reduce((total, row) => total + row.length, 0)
+      : (() => {
+          const ws = wb.Sheets[name];
+          if (!ws || !ws["!ref"]) return 0;
+          const range = XLSX.utils.decode_range(ws["!ref"]);
+          return (range.e.r - range.s.r) * (range.e.c - range.s.c + 1);
+        })();
     if (score > bestScore) { bestScore = score; best = name; }
   }
   return best;
+}
+
+/** สรุปชีตโดยไม่แก้ state เพื่อให้ผู้ใช้ตรวจสอบก่อนนำเข้าจริง */
+function previewSheet(wb, sheetName) {
+  const aoa = workbookRows(wb, sheetName);
+  if (!aoa.length) return { rows: 0, headers: [], columns: [], byType: {} };
+  const counts = aoa.slice(0, 10).map((row) => row.filter((value) => String(value ?? "").trim() !== "").length);
+  const maxCount = Math.max(...counts);
+  let headerRow = counts.findIndex((count) => count >= 2 && count >= maxCount * 0.6);
+  if (headerRow < 0) headerRow = 0;
+  const width = Math.max(...aoa.map((row) => row.length));
+  const headers = Array.from({ length: width }, (_, index) => {
+    const header = String(aoa[headerRow][index] ?? "").trim().replace(/\s+/g, " ");
+    return header || `คอลัมน์ที่ ${index + 1}`;
+  });
+  const rows = aoa.slice(headerRow + 1)
+    .map((row) => headers.map((_, index) => normalizeCell(row[index])))
+    .filter((row) => row.some((value) => value !== ""));
+  const columns = detectColumns(headers, rows);
+  const byType = columns.reduce((result, column) => {
+    result[column.type] = (result[column.type] || 0) + 1;
+    return result;
+  }, {});
+  return { rows: rows.length, headers, columns, byType };
+}
+
+function openWorkbookPreview(wb, fileName) {
+  const initialSheet = bestSheet(wb);
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay dyn-modal";
+  ov.innerHTML = `<div class="modal dlg import-preview">
+    <h2><i data-lucide="file-search"></i> ตรวจสอบก่อนนำเข้าข้อมูล</h2>
+    <p class="card-sub">ไฟล์ <b>${esc(fileName)}</b> ยังไม่ถูกนำเข้า เลือกชีตและตรวจการจำแนกคำถามก่อนเริ่มวิเคราะห์</p>
+    <label class="rp-field"><span>ชีตข้อมูล</span><select id="previewSheet" class="coltype">${wb.SheetNames.map((name) => `<option value="${esc(name)}" ${name === initialSheet ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
+    <div id="previewSummary" class="preview-summary"></div>
+    <div class="dlg-actions"><button class="btn" id="previewCancel">ยกเลิก</button><button class="btn primary" id="previewImport"><i data-lucide="upload"></i> นำเข้าชีตนี้</button></div>
+  </div>`;
+  const renderSummary = () => {
+    const info = previewSheet(wb, $("#previewSheet", ov).value);
+    const types = [
+      ["rating", "คะแนน 1–5"], ["sdg", "SDGs"], ["categorical", "ตัวเลือก"], ["text", "ปลายเปิด"], ["ignore", "ไม่วิเคราะห์"],
+    ].filter(([type]) => info.byType[type]).map(([type, label]) => `<span class="lv">${label} ${info.byType[type]}</span>`).join(" ");
+    $("#previewSummary", ov).innerHTML = `
+      <div class="preview-stats"><b>${info.rows}</b><span>แถวข้อมูล</span><b>${info.headers.length}</b><span>คอลัมน์</span></div>
+      <p>${types || "ยังไม่พบคอลัมน์ที่วิเคราะห์ได้"}</p>
+      <p class="card-sub">หัวตาราง: ${info.headers.slice(0, 5).map(esc).join(" · ")}${info.headers.length > 5 ? " …" : ""}</p>`;
+  };
+  $("#previewSheet", ov).onchange = renderSummary;
+  $("#previewCancel", ov).onclick = () => ov.remove();
+  $("#previewImport", ov).onclick = () => {
+    state.workbook = wb;
+    state.fileName = fileName;
+    loadSheet($("#previewSheet", ov).value);
+    setupSheetPicker(wb);
+    ov.remove();
+  };
+  ov.onclick = (event) => { if (event.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+  renderSummary();
+  refreshIcons();
 }
 
 function setupSheetPicker(wb) {
@@ -430,8 +497,7 @@ function setupSheetPicker(wb) {
 }
 
 function loadSheet(sheetName, opts = {}) {
-  const ws = state.workbook.Sheets[sheetName];
-  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true, blankrows: false });
+  const aoa = workbookRows(state.workbook, sheetName);
   if (!aoa.length) { toast("ชีตนี้ไม่มีข้อมูล"); return; }
   ingestAoA(aoa, { ...opts, sheetName, workbookForScan: state.workbook });
 }
@@ -710,6 +776,83 @@ function exportProject(withReview) {
   downloadBlob(new Blob([JSON.stringify(obj)], { type: "application/json" }), `${base}${withReview ? "-ตรวจแล้ว" : "-ส่งตรวจ"}.evalproj`);
   toast(withReview ? "ส่งกลับให้เจ้าของแล้ว (.evalproj)" : "สร้างไฟล์ส่งตรวจแล้ว — ส่งไฟล์ .evalproj ให้ผู้ตรวจได้เลย");
 }
+
+/** บันทึกเฉพาะการตั้งค่าที่นำไปใช้กับไฟล์แบบประเมินรอบถัดไปได้ — ไม่มีคำตอบผู้ประเมิน */
+function exportConfig() {
+  const obj = {
+    app: "eval-analyzer", kind: "config", version: 1, exportedAt: Date.now(),
+    columns: state.columns.map((column) => ({
+      header: column.header, type: column.type, group: column.group, item: column.item,
+      mergeIntoHeader: column.mergeInto != null ? state.columns[column.mergeInto]?.header || null : null,
+      noReport: !!column.noReport,
+    })),
+    valueMap: state.columns.flatMap((column) => state.valueMap[column.i]
+      ? [{ header: column.header, mappings: state.valueMap[column.i] }] : []),
+    roleMap: state.roleMap,
+    reportOpts: { ...state.reportOpts },
+  };
+  const base = state.projectName.trim() || state.fileName.replace(/\.[^.]+$/, "") || "แบบประเมิน";
+  downloadBlob(new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" }), `${base}-ตั้งค่า.evalconfig`);
+  toast("ส่งออกการตั้งค่าแล้ว — ไฟล์นี้ไม่มีข้อมูลคำตอบ");
+}
+
+/** ใช้ชื่อหัวตารางจับคู่แทนเลขคอลัมน์ เพื่อให้ใช้กับไฟล์ส่งออก Google Forms รอบใหม่ได้ */
+function importConfig(obj) {
+  if (!obj || obj.kind !== "config" || !Array.isArray(obj.columns)) {
+    toast("ไฟล์การตั้งค่าไม่ถูกต้อง");
+    return;
+  }
+  if (!state.rows.length) {
+    toast("กรุณานำเข้าข้อมูลแบบประเมินก่อน แล้วจึงใช้ไฟล์การตั้งค่า");
+    return;
+  }
+  const currentByHeader = new Map(state.columns.map((column) => [column.header, column]));
+  let applied = 0;
+  for (const saved of obj.columns) {
+    const column = currentByHeader.get(saved.header);
+    if (!column) continue;
+    Object.assign(column, {
+      type: saved.type || column.type,
+      group: saved.group ?? column.group,
+      item: saved.item ?? column.item,
+      noReport: !!saved.noReport,
+      _conf: 1,
+    });
+    column.mergeInto = saved.mergeIntoHeader != null ? (currentByHeader.get(saved.mergeIntoHeader)?.i ?? null) : null;
+    applied++;
+  }
+  state.valueMap = {};
+  for (const saved of obj.valueMap || []) {
+    const column = currentByHeader.get(saved.header);
+    if (column && saved.mappings && typeof saved.mappings === "object") state.valueMap[column.i] = saved.mappings;
+  }
+  if (obj.roleMap && typeof obj.roleMap === "object") state.roleMap = obj.roleMap;
+  if (obj.reportOpts && typeof obj.reportOpts === "object") state.reportOpts = { ...state.reportOpts, ...obj.reportOpts };
+  state.mapConfirmed = applied > 0;
+  updateStatusCol();
+  bumpDataVersion();
+  renderFilterBar();
+  saveSessionSnapshot();
+  renderActiveTab();
+  toast(applied ? `ใช้การตั้งค่ากับ ${applied} คอลัมน์แล้ว` : "ไม่พบหัวตารางที่ตรงกับไฟล์การตั้งค่า");
+}
+
+function openConfigModal() {
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay dyn-modal";
+  ov.innerHTML = `<div class="modal dlg">
+    <h2><i data-lucide="settings-2"></i> การตั้งค่าที่ใช้ซ้ำ</h2>
+    <p>ส่งออกชนิดคอลัมน์ การจัดด้าน การรวมตัวเลือก และการตั้งค่ารายงานเป็นไฟล์ <code>.evalconfig</code> โดยไม่มีคำตอบของผู้ประเมิน</p>
+    <div class="dlg-actions"><button class="btn" id="configClose">ปิด</button><button class="btn" id="configImport"><i data-lucide="upload"></i> นำเข้าการตั้งค่า</button><button class="btn primary" id="configExport"><i data-lucide="download"></i> ส่งออกการตั้งค่า</button></div>
+  </div>`;
+  $("#configClose", ov).onclick = () => ov.remove();
+  $("#configImport", ov).onclick = () => { ov.remove(); $("#configInput").click(); };
+  $("#configExport", ov).onclick = () => { ov.remove(); exportConfig(); };
+  ov.onclick = (event) => { if (event.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+  refreshIcons();
+}
+
 function importProject(obj, srcName) {
   if (!obj || obj.kind !== "project" || !Array.isArray(obj.headers) || !Array.isArray(obj.rows)) {
     toast("ไฟล์ .evalproj ไม่ถูกต้อง"); return;
@@ -876,24 +1019,34 @@ function updateFileMeta() {
   $("#btnSync")?.classList.toggle("hidden", state.source !== "gsheet");
 }
 
-function filteredRows() {
-  const active = Object.entries(state.filterSel).filter(([, v]) => v != null);
-  if (!active.length) return state.rows;
-  return state.rows.filter((r) => active.every(([i, v]) => rowValueCombined(r, +i) === v));
+/* ฟิลเตอร์เป็นอินพุตร่วมของแท็บส่วนใหญ่ จึงเก็บผลลัพธ์ไว้จนกว่าข้อมูลหรือฟิลเตอร์จะเปลี่ยน
+   ช่วยไม่ให้การวาดหนึ่งครั้งวนกรองแถวชุดเดิมซ้ำระหว่างตาราง กราฟ และสถิติ */
+let _filteredRowsKey = null;
+let _filteredRows = null;
+
+function filterKey() {
+  return state.filterCols.map((i) => `${i}=${state.filterSel[i] ?? ""}`).join("|");
 }
 
-/** สถิติจากค่าคะแนนที่แปลงเป็นตัวเลข 1–5 แล้ว */
-function statsFromVals(nums) {
-  const n = nums.length;
-  const freq = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
-  if (!n) return { n: 0, mean: NaN, sd: NaN, freq };
-  let sum = 0;
-  for (const v of nums) { sum += v; freq[Math.round(v)] = (freq[Math.round(v)] || 0) + 1; }
-  const mean = sum / n;
-  let sq = 0;
-  for (const v of nums) sq += (v - mean) ** 2;
-  const sd = n > 1 ? Math.sqrt(sq / (n - 1)) : 0;
-  return { n, mean, sd, freq };
+function activeFilters() {
+  return state.filterCols
+    .map((colIdx) => [colIdx, state.filterSel[colIdx]])
+    .filter(([, value]) => value != null);
+}
+
+function filteredRows() {
+  const key = `${_dataVersion}|${filterKey()}`;
+  if (_filteredRowsKey === key) return _filteredRows;
+
+  const filters = activeFilters();
+  _filteredRows = !filters.length ? state.rows : state.rows.filter((row) => {
+    for (const [colIdx, value] of filters) {
+      if (rowValueCombined(row, colIdx) !== value) return false;
+    }
+    return true;
+  });
+  _filteredRowsKey = key;
+  return _filteredRows;
 }
 
 /* --- แคชผลวิเคราะห์: แปลงคะแนน/นับ SDG ครั้งเดียวต่อ (ข้อมูล, ตัวกรอง)
@@ -901,30 +1054,16 @@ function statsFromVals(nums) {
 let _dataVersion = 0;      // เพิ่มค่าเมื่อข้อมูลหรือชนิดคอลัมน์เปลี่ยน
 let _analysisKey = null;
 let _analysis = null;
-function bumpDataVersion() { _dataVersion++; _analysisKey = null; _analysis = null; }
-
-/** วิเคราะห์ชุดข้อมูลใด ๆ (pure) — ใช้ทั้งชุดปัจจุบันและแบบประเมินอื่นที่ดึงมารวมเล่ม */
-function analyzeDataset(rows, columns) {
-  // กลุ่มคำถามคะแนน — แปลงค่าแต่ละคอลัมน์ครั้งเดียว แล้ว pool ต่อจากค่าที่แปลงแล้ว
-  const cols = columns.filter((c) => c.type === "rating");
-  const names = [...new Set(cols.map((c) => c.group))];
-  const groups = names.map((name) => {
-    const items = cols.filter((c) => c.group === name).map((c) => {
-      const vals = [];
-      for (const r of rows) { const v = parseRating(r[c.i]); if (v != null) vals.push(v); }
-      return { label: c.item, colIdx: c.i, _vals: vals, stats: statsFromVals(vals) };
-    });
-    const pooled = items.flatMap((it) => it._vals);
-    return { name, items, total: statsFromVals(pooled), _vals: pooled };
-  }).filter((g) => g.items.some((it) => it.stats.n > 0));
-
-  const overall = statsFromVals(groups.flatMap((g) => g._vals));
-  const sdgs = computeSdgs(rows, columns);
-  return { groups, overall, sdgs };
+function bumpDataVersion() {
+  _dataVersion++;
+  _analysisKey = null;
+  _analysis = null;
+  _filteredRowsKey = null;
+  _filteredRows = null;
 }
 
 function computeAnalysis() {
-  const key = `${_dataVersion}|${state.filterCols.map((i) => `${i}=${state.filterSel[i] ?? ""}`).join("|")}`;
+  const key = `${_dataVersion}|${filterKey()}`;
   if (_analysis && _analysisKey === key) return _analysis;
   _analysis = analyzeDataset(filteredRows(), state.columns);
   _analysisKey = key;
@@ -945,46 +1084,27 @@ function cachedChartURL(id, make) {
   return url;
 }
 
-/* ชื่อย่อมาตรฐานของ SDGs — ใช้เป็นป้ายในกราฟแทนหัวคอลัมน์ที่มีคำอธิบายยาว */
-const SDG_NAMES = {
-  1: "ขจัดความยากจน", 2: "ขจัดความหิวโหย", 3: "สุขภาพและความเป็นอยู่ที่ดี",
-  4: "การศึกษาที่มีคุณภาพ", 5: "ความเท่าเทียมทางเพศ", 6: "น้ำสะอาดและการสุขาภิบาล",
-  7: "พลังงานสะอาดที่เข้าถึงได้", 8: "งานที่มีคุณค่าและเศรษฐกิจเติบโต",
-  9: "อุตสาหกรรม นวัตกรรม โครงสร้างพื้นฐาน", 10: "ลดความเหลื่อมล้ำ",
-  11: "เมืองและชุมชนที่ยั่งยืน", 12: "การผลิตและบริโภคที่ยั่งยืน",
-  13: "การรับมือการเปลี่ยนแปลงสภาพภูมิอากาศ", 14: "ทรัพยากรทางทะเล",
-  15: "ระบบนิเวศบนบก", 16: "สันติภาพ ยุติธรรม สถาบันเข้มแข็ง",
-  17: "หุ้นส่วนเพื่อการพัฒนาที่ยั่งยืน",
-};
-
-function computeSdgs(rows, columns = state.columns) {
-  return columns.filter((c) => c.type === "sdg").map((c) => {
-    let agree = 0, n = 0;
-    for (const r of rows) {
-      const v = String(r[c.i]).trim();
-      if (v === "") continue;
-      n++;
-      if (isAgreeValue(v)) agree++;
-    }
-    const m = c.header.match(/SDG\s*(\d+)/i);
-    const num = m ? +m[1] : null;
-    const name = num && SDG_NAMES[num] ? SDG_NAMES[num] : null;
-    return {
-      header: c.header,
-      short: num ? `SDG ${num}` : c.header.slice(0, 20),
-      label: num ? `SDG ${num} · ${name || ""}`.trim() : c.header.slice(0, 40),
-      name,
-      num,
-      icon: num && num >= 1 && num <= 17 ? `assets/sdg/sdg-${String(num).padStart(2, "0")}.jpg` : null,
-      n, agree, disagree: n - agree,
-      pct: n ? (agree / n) * 100 : 0,
-    };
-  }).filter((s) => s.n > 0);
-}
-
 /** คอลัมน์ที่ถูก "รวมเข้ากับ" คอลัมน์นี้ (เช่น บทบาท รวมเข้ากับ สถานะ — คำถามเดียวกันคนละกิ่งของฟอร์ม) */
+let _mergedColumnsKey = null;
+let _mergedColumnsByTarget = new Map();
+
+/** สร้างดัชนีคอลัมน์ที่ผนวกไว้ครั้งเดียวต่อเวอร์ชันข้อมูล
+    rowValueCombined() ถูกเรียกต่อทุกแถวระหว่างกรอง/นับความถี่ จึงไม่ควรค้นทุกคอลัมน์ซ้ำ */
 function mergedIntoCols(colIdx, columns = state.columns) {
-  return columns.filter((c) => c.mergeInto === colIdx && c.type === "categorical").map((c) => c.i);
+  if (columns !== state.columns) {
+    return columns.filter((c) => c.mergeInto === colIdx && c.type === "categorical").map((c) => c.i);
+  }
+  if (_mergedColumnsKey !== _dataVersion) {
+    _mergedColumnsByTarget = new Map();
+    for (const col of state.columns) {
+      if (col.type !== "categorical" || col.mergeInto == null) continue;
+      const merged = _mergedColumnsByTarget.get(col.mergeInto) || [];
+      merged.push(col.i);
+      _mergedColumnsByTarget.set(col.mergeInto, merged);
+    }
+    _mergedColumnsKey = _dataVersion;
+  }
+  return _mergedColumnsByTarget.get(colIdx) || [];
 }
 /** ค่าของแถวเมื่อรวมคอลัมน์แล้ว — ใช้ค่าแรกที่ไม่ว่าง (ฟอร์มแยกกิ่งจะกรอกช่องเดียว) */
 function rowValueCombined(r, colIdx, columns = state.columns) {
@@ -1430,7 +1550,8 @@ function renderDashboard(panel, rows) {
   const groups = ratingGroups(rows);
 
   // แถบฮีโร่ภาพรวม — สรุปหัวใจของผลประเมินก่อนลงลึก (อัตราตอบกลับแก้ตัวเลขเป้าหมายได้)
-  const totalResp = state.rows.length;
+  // เมื่อเลือกตัวกรอง ตัวเลขในส่วนนี้ต้องอ้างอิงชุดเดียวกับกราฟ/สถิติด้านล่าง
+  const totalResp = rows.length;
   const respPct = state.respTarget ? Math.min((totalResp / state.respTarget) * 100, 999) : null;
   const heroBars = groups.slice(0, 6).map((g) => `
     <div class="hb-row" title="${esc(g.name)} — x̄ ${f2(g.total.mean)}">
@@ -3937,11 +4058,13 @@ function downloadDocx(innerHtml) {
 function init() {
   const dz = $("#dropzone");
   const fi = $("#fileInput");
+  const configInput = $("#configInput");
 
   dz.addEventListener("click", (e) => { if (e.target.id !== "btnDemo") fi.click(); });
   $("#btnBrowse").onclick = (e) => { e.stopPropagation(); fi.click(); };
   $("#btnChangeFile").onclick = () => fi.click();
   fi.onchange = () => { if (fi.files[0]) handleFile(fi.files[0]); fi.value = ""; };
+  configInput.onchange = () => { if (configInput.files[0]) handleFile(configInput.files[0]); configInput.value = ""; };
 
   ["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("dragover"); }));
   ["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("dragover"); }));
@@ -4000,6 +4123,7 @@ function init() {
   $("#btnSwitchUser").onclick = showLogin;
   $("#btnMerge").onclick = openMergeModal;
   $("#btnUnmerge").onclick = undoMerge;
+  $("#btnConfig").onclick = openConfigModal;
   $("#btnSendReview").onclick = () => exportProject(false);
   const brand = document.querySelector(".side-logo");
   if (brand) { brand.style.cursor = "pointer"; brand.title = "กลับหน้าแรก"; brand.onclick = goHome; }

@@ -969,6 +969,24 @@ tr.row-lowconf td { background: color-mix(in srgb, #e08b1e 6%, transparent); }
 .issue-row .ir-msg { flex: 1; min-width: 0; }
 .issue-row .ir-btns { display: flex; gap: 6px; flex-shrink: 0; margin-left: 8px; }
 .acked-row { opacity: 0.62; }
+.busy-overlay {
+  position: fixed; inset: 0; z-index: 1300; display: none; place-items: center;
+  background: color-mix(in srgb, var(--bg) 52%, transparent); backdrop-filter: blur(3px);
+}
+.busy-overlay.show { display: grid; }
+.busy-card {
+  display: flex; align-items: center; gap: 12px; min-width: min(90vw, 280px); padding: 16px 20px;
+  border: 1px solid var(--glass-border); border-radius: 14px; background: var(--surface-1);
+  color: var(--text-primary); font-size: 13.5px; font-weight: 650; box-shadow: var(--shadow-pop);
+}
+.busy-spinner { width: 18px; height: 18px; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: busy-spin .7s linear infinite; }
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+.import-preview { max-width: 630px; }
+.preview-summary { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.preview-summary p { margin: 8px 0 0; font-size: 12.5px; line-height: 1.65; }
+.preview-stats { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 9px; align-items: baseline; }
+.preview-stats b { font-size: 20px; color: var(--accent); }
+.preview-stats span { color: var(--muted); font-size: 12px; }
 @media (max-width: 720px) {
   .issue-row { flex-wrap: wrap; }
   .issue-row .ir-btns { margin-left: 21px; }
