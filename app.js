@@ -1222,12 +1222,38 @@ function yLabelSpace(chart) {
   return Math.round(Math.min(HORIZONTAL_LABEL_SPACE, Math.max(110, (chart?.width || 700) * 0.34)));
 }
 
+const Y_LABEL_FONT = `11.5px ${FONT_STACK}`;
+
+/** ตัดข้อความให้พอดีงบ โดยวัดด้วย context เดียวกับที่จะวาดจริง
+    — ห้ามวัดด้วย canvas ตัวอื่น เพราะถ้าฟอนต์ที่สองที่นั้น resolve ไม่เหมือนกัน
+    ป้ายจะถูกตัดผิดขนาด (เคยทำให้ป้ายเหลือ 2 ตัวอักษรบนบางเครื่อง) */
+function fitLabel(ctx, text, maxPx) {
+  const s = String(text).replace(/\s+/g, " ").trim();
+  if (ctx.measureText(s).width <= maxPx) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(s.slice(0, mid) + "…").width <= maxPx) lo = mid;
+    else hi = mid - 1;
+  }
+  return s.slice(0, lo) + "…";
+}
+
 const yLabelPlugin = {
   id: "yLabel",
   beforeLayout(chart, _args, opts) {
     if (!opts?.labels?.length) return;
     const padding = chart.options.layout.padding;
-    if (padding && typeof padding === "object") padding.left = yLabelSpace(chart);
+    if (!padding || typeof padding !== "object") return;
+    // จองพื้นที่เท่าที่ป้ายยาวที่สุดต้องใช้จริง (ไม่เกิน 42% ของกราฟ) — วัดด้วย ctx ของกราฟเอง
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = Y_LABEL_FONT;
+    let widest = 0;
+    for (const label of opts.labels) widest = Math.max(widest, ctx.measureText(String(label)).width);
+    ctx.restore();
+    const cap = Math.max(110, (chart.width || 700) * 0.42);
+    padding.left = Math.round(Math.min(Math.max(110, widest + 26), cap));
   },
   afterDraw(chart, _args, opts) {
     if (!opts?.labels?.length) return;
@@ -1236,18 +1262,18 @@ const yLabelPlugin = {
     if (!scale || !area) return;
     const { ctx } = chart;
     const x = area.left - 12;
-    const maxWidth = Math.max(120, area.left - 26);
+    const maxWidth = Math.max(60, area.left - 24);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, area.top, Math.max(0, area.left - 8), area.bottom - area.top);
+    ctx.rect(0, area.top - 10, Math.max(0, area.left - 6), area.bottom - area.top + 20);
     ctx.clip();
     ctx.fillStyle = opts.color;
-    ctx.font = `11.5px ${FONT_STACK}`;
+    ctx.font = Y_LABEL_FONT;
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     opts.labels.forEach((label, index) => {
       const y = scale.getPixelForValue(index);
-      if (Number.isFinite(y)) ctx.fillText(shortLabel(label, maxWidth), x, y);
+      if (Number.isFinite(y)) ctx.fillText(fitLabel(ctx, label, maxWidth), x, y);
     });
     ctx.restore();
   },
@@ -4258,8 +4284,11 @@ function init() {
   } catch { /* เบราว์เซอร์ไม่รองรับการติดตามธีมระบบ — ใช้ธีมที่เลือกไว้ต่อไปได้ */ }
 
   // วาดกราฟใหม่หลังเว็บฟอนต์โหลดเสร็จ — กัน Chart.js วัดขนาดข้อความด้วยฟอนต์สำรองค้างไว้
+  // สำคัญ: ต้องล้างแคชรูปกราฟของรายงานด้วย ไม่งั้นรูปที่สร้างตอนฟอนต์ยังไม่มา (ป้ายถูกตัดผิด)
+  // จะถูกใช้ซ้ำตลอด แม้จะ re-render แล้วก็ตาม
   if (document.fonts?.ready) {
     document.fonts.ready.then(() => {
+      _reportImgCache.clear();
       if (!$("#workspace").classList.contains("hidden")) renderActiveTab();
     });
   }
