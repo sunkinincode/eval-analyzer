@@ -1214,45 +1214,70 @@ function shortLabel(s, maxPx = LABEL_PX) {
 
 /* Chart.js คำนวณพื้นที่ tick ใหม่เมื่อ export เป็น canvas ทำให้ชื่อแกน Y บางครั้งถูก clip
    จึงกันพื้นที่ป้ายเองและวาดป้ายหลังวาดกราฟ: เหมือนกันทั้งบนหน้าเว็บและรูปที่ลง Word */
-const Y_LABEL_FONT = `11.5px ${FONT_STACK}`;
-const Y_LABEL_MIN_CHARS = 12;   // ต่ำกว่านี้อ่านไม่รู้เรื่อง — ยอมให้ล้นดีกว่าตัดจนเหลือ 2 ตัว
+const Y_LABEL_SIZE = 11.5;
+const Y_LABEL_MIN_SIZE = 8.5;   // ย่อได้ถึงเท่านี้ก่อนจะยอมตัดข้อความ
+const Y_LABEL_FONT = `${Y_LABEL_SIZE}px ${FONT_STACK}`;
+const yFontAt = (size) => `${size}px ${FONT_STACK}`;
 
-/** ตัดข้อความให้พอดีงบ วัดด้วย context เดียวกับที่จะวาดจริง
-    ถ้าการวัดให้ผลผิดปกติ (บางเครื่อง/บางจังหวะโหลดฟอนต์) จะยอมให้ข้อความล้นออกมา
-    แทนที่จะตัดจนเหลือไม่กี่ตัวอักษร เพราะป้ายที่อ่านไม่ออกแย่กว่าป้ายที่ยาวเกิน */
-function fitLabel(ctx, text, maxPx) {
+/* document.fonts.ready จบทันทีถ้ายังไม่มีใคร "ขอ" ฟอนต์นั้น — และฟอนต์ไทยของเราถูกขอ
+   ตอนวาดกราฟครั้งแรกเท่านั้น กราฟแรกจึงถูกวัดด้วยฟอนต์สำรอง (แคบกว่าจริง) แล้วกันที่ป้ายไว้ไม่พอ
+   จนตัวหนังสือล้นไปทับแท่งกราฟ — จึงต้องสั่งโหลดฟอนต์ให้เสร็จก่อนอย่างชัดเจน */
+const thaiFontReady = (async () => {
+  try {
+    if (!document.fonts?.load) return false;
+    await Promise.all([
+      document.fonts.load(`${Y_LABEL_SIZE}px Anuphan`),
+      document.fonts.load(`600 12px Anuphan`),
+    ]);
+    await document.fonts.ready;
+    return true;
+  } catch { return false; }
+})();
+
+/** จัดป้ายให้พอดีพื้นที่ โดย "วัดกับวาดด้วย context เดียวกัน" เสมอ
+    ลำดับ: ใส่เต็ม → ย่อขนาดตัวอักษรลงทีละนิด → ตัดท้ายด้วย … เป็นทางสุดท้าย
+    เป้าหมายคือป้ายต้องอยู่ในเขตของตัวเอง ไม่ล้นไปทับแท่งกราฟ และไม่หดจนอ่านไม่ออก */
+function fitYLabel(ctx, text, maxPx) {
   const s = String(text).replace(/\s+/g, " ").trim();
-  let w = 0;
-  try { w = ctx.measureText(s).width; } catch { return s; }
-  if (!Number.isFinite(w) || w <= 0) return s;
-  if (w <= maxPx) return s;
+  let size = Y_LABEL_SIZE;
+  ctx.font = yFontAt(size);
+  let w = ctx.measureText(s).width;
+  if (!Number.isFinite(w) || w <= 0) return { text: s, size };   // วัดไม่ได้ → วาดเต็ม
+  while (w > maxPx && size > Y_LABEL_MIN_SIZE) {
+    size = Math.max(Y_LABEL_MIN_SIZE, size - 0.5);
+    ctx.font = yFontAt(size);
+    w = ctx.measureText(s).width;
+  }
+  if (w <= maxPx) return { text: s, size };
   let lo = 0, hi = s.length;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
     if (ctx.measureText(s.slice(0, mid) + "…").width <= maxPx) lo = mid;
     else hi = mid - 1;
   }
-  const floor = Math.min(Y_LABEL_MIN_CHARS, s.length);
-  if (lo < floor) return s.slice(0, floor) + "…";
-  return s.slice(0, lo) + "…";
-}
-
-/** พื้นที่ที่ต้องกันไว้ให้ป้ายแกน Y — คำนวณตอนสร้าง config (ไม่พึ่ง hook ของ Chart.js)
-    ค่าเดียวกันจึงถูกใช้แน่นอนทั้งบนหน้าเว็บและตอน export เป็นรูป */
-function measureLabelSpace(labels, chartWidth) {
-  let widest = 0;
-  try {
-    if (!_measureCtx) _measureCtx = document.createElement("canvas").getContext("2d");
-    _measureCtx.font = Y_LABEL_FONT;
-    for (const l of labels) widest = Math.max(widest, _measureCtx.measureText(String(l)).width);
-  } catch { widest = 0; }
-  if (!Number.isFinite(widest) || widest <= 0) widest = 200;
-  const cap = Math.max(150, (chartWidth || 700) * 0.45);
-  return Math.round(Math.min(Math.max(120, widest + 26), cap));
+  return { text: s.slice(0, Math.max(lo, 1)) + "…", size };
 }
 
 const yLabelPlugin = {
   id: "yLabel",
+  beforeLayout(chart, _args, opts) {
+    if (!opts?.labels?.length) return;
+    const padding = chart.options.layout.padding;
+    if (!padding || typeof padding !== "object") return;
+    // วัดด้วย context ของกราฟเอง (ตัวเดียวกับที่จะวาด) แล้วกันที่ให้พอจริง
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = Y_LABEL_FONT;
+    let widest = 0;
+    for (const label of opts.labels) {
+      const w = ctx.measureText(String(label)).width;
+      if (Number.isFinite(w)) widest = Math.max(widest, w);
+    }
+    ctx.restore();
+    if (widest <= 0) widest = 220;
+    const cap = Math.max(140, (chart.width || 700) * 0.45);
+    padding.left = Math.round(Math.min(Math.max(120, widest + 24), cap));
+  },
   afterDraw(chart, _args, opts) {
     if (!opts?.labels?.length) return;
     const scale = chart.scales.y;
@@ -1260,16 +1285,21 @@ const yLabelPlugin = {
     if (!scale || !area) return;
     const { ctx } = chart;
     const x = area.left - 12;
-    const maxWidth = Math.max(80, area.left - 22);
+    const maxWidth = Math.max(70, area.left - 20);
     ctx.save();
-    // ไม่ clip: ถ้าพื้นที่ที่กันไว้ยังไม่พอ ให้ข้อความล้นออกไปได้ ดีกว่าโดนตัดหาย
+    // กันเด็ดขาดไม่ให้ตัวหนังสือล้นไปทับแท่งกราฟ (ถ้าย่อ/ตัดแล้วยังพอดีก็จะไม่โดนอะไร)
+    ctx.beginPath();
+    ctx.rect(0, area.top - 12, Math.max(0, area.left - 4), area.bottom - area.top + 24);
+    ctx.clip();
     ctx.fillStyle = opts.color;
-    ctx.font = Y_LABEL_FONT;
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     opts.labels.forEach((label, index) => {
       const y = scale.getPixelForValue(index);
-      if (Number.isFinite(y)) ctx.fillText(fitLabel(ctx, label, maxWidth), x, y);
+      if (!Number.isFinite(y)) return;
+      const fitted = fitYLabel(ctx, label, maxWidth);
+      ctx.font = yFontAt(fitted.size);
+      ctx.fillText(fitted.text, x, y);
     });
     ctx.restore();
   },
@@ -1340,7 +1370,7 @@ function cfgMeanBar(labels, means, t, title, opts = {}) {
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { left: measureLabelSpace(labels, 860), right: 52, top: opts.passLine ? 16 : 0 } },
+      layout: { padding: { left: 200, right: 52, top: opts.passLine ? 16 : 0 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1424,7 +1454,7 @@ function cfgLikert(items, t, title) {
     data: { labels: items.map((it) => it.label), datasets },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { left: measureLabelSpace(items.map((it) => it.label), 860) } },
+      layout: { padding: { left: 200 } },
       plugins: {
         legend: { position: "bottom", labels: { color: t.secondary, boxWidth: 12, boxHeight: 12, font: { family: FONT_STACK, size: 11.5 } } },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1458,7 +1488,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { left: measureLabelSpace(labels, 860), right: 88 } },
+      layout: { padding: { left: 200, right: 88 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -4282,12 +4312,10 @@ function init() {
   // วาดกราฟใหม่หลังเว็บฟอนต์โหลดเสร็จ — กัน Chart.js วัดขนาดข้อความด้วยฟอนต์สำรองค้างไว้
   // สำคัญ: ต้องล้างแคชรูปกราฟของรายงานด้วย ไม่งั้นรูปที่สร้างตอนฟอนต์ยังไม่มา (ป้ายถูกตัดผิด)
   // จะถูกใช้ซ้ำตลอด แม้จะ re-render แล้วก็ตาม
-  if (document.fonts?.ready) {
-    document.fonts.ready.then(() => {
-      _reportImgCache.clear();
-      if (!$("#workspace").classList.contains("hidden")) renderActiveTab();
-    });
-  }
+  thaiFontReady.then(() => {
+    _reportImgCache.clear();
+    if (!$("#workspace").classList.contains("hidden")) renderActiveTab();
+  });
 
   // ผู้ใช้งาน + ประวัติ
   try { state.user = JSON.parse(localStorage.getItem("evalUser") || "null"); } catch { state.user = null; }
@@ -4333,14 +4361,14 @@ async function copyDiagnostics() {
     `เวอร์ชัน: ${APP_VERSION}`,
     `หน้าจอ: ${window.innerWidth}x${window.innerHeight} · dpr ${window.devicePixelRatio}`,
     `เบราว์เซอร์: ${navigator.userAgent}`,
-    `ฟอนต์ Anuphan โหลดแล้ว: ${document.fonts?.check?.("11.5px Anuphan") ? "ใช่" : "ไม่"} · สถานะ ${document.fonts?.status || "-"}`,
+    `ฟอนต์ Anuphan พร้อม: ${document.fonts?.check?.("11.5px Anuphan") ? "ใช่" : "ไม่"} · สถานะ ${document.fonts?.status || "-"}`,
     `วัดข้อความตัวอย่าง — ฟอนต์กราฟ ${m(Y_LABEL_FONT)}px · sans-serif ${m("11.5px sans-serif")}px`,
     `ธีม: ${state.theme} · แท็บ: ${state.activeTab} · แถว: ${state.rows.length}`,
   ];
   const chart = state.charts.find((c) => c.config?.options?.indexAxis === "y");
   if (chart) {
     const labels = chart.config.options.plugins?.yLabel?.labels || [];
-    lines.push(`กราฟบนจอ: กว้าง ${Math.round(chart.width)} · พื้นที่ป้าย ${Math.round(chart.chartArea.left)} · ป้ายที่วาด "${labels[0] ? fitLabel(chart.ctx, labels[0], Math.max(80, chart.chartArea.left - 22)) : "-"}"`);
+    lines.push(`กราฟบนจอ: กว้าง ${Math.round(chart.width)} · พื้นที่ป้าย ${Math.round(chart.chartArea.left)} · ป้ายที่วาด "${labels[0] ? fitYLabel(chart.ctx, labels[0], Math.max(70, chart.chartArea.left - 20)).text : "-"}"`);
   }
   const text = lines.join("\n");
   try { await navigator.clipboard.writeText(text); toast("คัดลอกข้อมูลวินิจฉัยแล้ว — วางส่งให้ผู้พัฒนาได้เลย"); }
