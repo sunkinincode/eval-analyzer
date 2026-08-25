@@ -2446,9 +2446,34 @@ function computeReadiness() {
   if (h.fuzzy.length) add("fuzzy", "warn",
     `พบตัวเลือกที่สะกดคล้ายกัน ${h.fuzzy.length} คู่ — เลือก "รวม" หรือ "คนละค่า" รายคู่ที่การ์ดด้านล่าง`,
     { ackable: false });
-  h.missing.filter((m) => m.pct > 20 && m.pct < 85 && state.columns[m.i]?.type !== "text").forEach((m) =>
-    add(`miss|${m.i}`, "warn", `"${esc(m.header.slice(0, 40))}" มีค่าว่าง ${m.n} ช่อง (${m.pct.toFixed(1)}%)`,
-      { ackNote: "รับทราบ — วิเคราะห์จากผู้ที่ตอบจริง (available-case) และระบุ n ในรายงาน" }));
+  /* ค่าว่างจาก "คำถามที่ถามเฉพาะบางกลุ่ม" เป็นโครงสร้างของฟอร์ม ไม่ใช่ปัญหาคุณภาพข้อมูล —
+     ข้อที่คนในด้านเดียวกันตอบครบพอ ๆ กัน ถือว่าปกติ (เทียบกับข้ออื่นในด้านเดียวกัน)
+     ที่เหลือรวมเป็นรายการเดียว จะได้ไม่ต้องกดรับทราบทีละสิบ ๆ คอลัมน์ */
+  const answeredOf = (i) => state.rows.length - (h.missing.find((x) => x.i === i)?.n || 0);
+  const siblingMax = (col) => {
+    if (col.type !== "rating" || !col.group) return null;
+    const sib = state.columns.filter((c) => c.type === "rating" && c.group === col.group);
+    return Math.max(...sib.map((c) => answeredOf(c.i)));
+  };
+  const partial = [], byGroup = [];
+  h.missing.filter((m) => m.pct > 20 && state.columns[m.i]?.type !== "text").forEach((m) => {
+    const col = state.columns[m.i];
+    const sMax = siblingMax(col);
+    if (sMax && answeredOf(m.i) >= sMax * 0.9) return;   // ตอบครบเท่าเพื่อนร่วมด้าน = โครงสร้างฟอร์ม
+    (m.pct >= 85 ? byGroup : partial).push(m);
+  });
+  if (partial.length) {
+    const top = partial.sort((a, b) => b.pct - a.pct).slice(0, 3).map((m) => `${esc(m.header.slice(0, 26))} (${m.pct.toFixed(0)}%)`);
+    add("miss-partial", "warn",
+      partial.length === 1
+        ? `"${esc(partial[0].header.slice(0, 40))}" มีค่าว่าง ${partial[0].n} ช่อง (${partial[0].pct.toFixed(1)}%)`
+        : `มี ${partial.length} คอลัมน์ที่มีค่าว่างเกิน 20% เช่น ${top.join(" · ")} — ดูรายละเอียดทุกคอลัมน์ได้ที่ตาราง "ค่าว่างรายคอลัมน์" ด้านล่าง`,
+      { ackNote: "รับทราบ — วิเคราะห์จากผู้ที่ตอบจริง (available-case) และระบุ n กำกับในรายงานทุกตาราง" });
+  }
+  if (byGroup.length) {
+    add("miss-branch", "info",
+      `มี ${byGroup.length} คอลัมน์ที่มีผู้ตอบเพียงบางกลุ่ม (ว่างเกิน 85%) — ปกติสำหรับคำถามเฉพาะกลุ่ม เช่น แบบประเมินของผู้จัด`);
+  }
   h.unparsed.forEach((u) => add(`unparsed|${u.header}`, "warn",
     `"${esc(u.header.slice(0, 40))}" มีคำตอบที่แปลงเป็นคะแนนไม่ได้ ${u.n} ค่า — ข้อนั้นถูกตัดจากการคำนวณ`,
     { tab: "columns", fixLabel: "ตรวจชนิดคอลัมน์" }));
@@ -2468,8 +2493,6 @@ function computeReadiness() {
       `กลุ่มผู้ตอบ ${unmapped.length} ค่า ยังไม่ได้ระบุบทบาท (ช่วยให้การแยกฐานผู้ประเมินแม่นขึ้น)`,
       { tab: "columns", fixLabel: "ไประบุบทบาท" });
   }
-  h.missing.filter((m) => m.pct >= 85 && state.columns[m.i]?.type !== "text").forEach((m) =>
-    add(`misshi|${m.i}`, "info", `"${esc(m.header.slice(0, 40))}" มีผู้ตอบเพียงบางกลุ่ม (ว่าง ${m.pct.toFixed(1)}%) — ปกติสำหรับคำถามเฉพาะกลุ่ม เช่น แบบประเมินของผู้จัด`));
   if (h.emptyHeaders.length) add("emptyhead", "info", `มีคอลัมน์หัวว่าง ${h.emptyHeaders.length} คอลัมน์ — ระบบตั้งชื่อให้อัตโนมัติแล้ว`);
 
   const active = items.filter((x) => !x.acked);
