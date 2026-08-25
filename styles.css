@@ -1040,3 +1040,9 @@ tr.row-lowconf td { background: color-mix(in srgb, #e08b1e 6%, transparent); }
 .boot-error h2 { font-size: 19px; margin: 0 0 12px; }
 .boot-error p { max-width: 560px; margin: 0 auto 12px; }
 .boot-error .boot-detail { font-size: 12.5px; opacity: 0.6; word-break: break-word; }
+
+/* ---------- เลขเวอร์ชันบนแถบข้าง (ใช้ยืนยันว่าเบราว์เซอร์โหลดไฟล์ใหม่แล้ว) ---------- */
+.app-version {
+  margin-top: 8px; text-align: center; font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.02em; color: var(--muted); opacity: 0.75;
+}

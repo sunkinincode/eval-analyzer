@@ -4,6 +4,13 @@
 "use strict";
 
 const { analyzeDataset, isSdgLikeValue, parseRating, statsFromVals } = window.EvalAnalysis;
+
+/* เวอร์ชันไฟล์ที่เบราว์เซอร์โหลดมาจริง — อ่านจาก ?v= ของ <script> ตัวเอง
+   ใช้ตอบคำถาม "อัปเดตแล้วหรือยัง" ได้ทันทีโดยไม่ต้องเดาว่าติดแคชไหม */
+const APP_VERSION = (() => {
+  try { return (String(document.currentScript?.src || "").match(/[?&]v=(\d+)/) || [])[1] || "dev"; }
+  catch { return "dev"; }
+})();
 const db = window.EvalStorage.createStore({
   name: "evalAnalyzer", version: 1,
   stores: [{ name: "sessions", keyPath: "id" }, { name: "users", keyPath: "name" }],
@@ -4254,6 +4261,15 @@ function init() {
   // หน้าแรกครั้งแรกเลื่อนเข้า
   const es0 = $("#emptyState");
   if (es0 && !es0.classList.contains("hidden")) { es0.classList.remove("anim-page"); void es0.offsetWidth; es0.classList.add("anim-page"); }
+  const sideBottom = document.querySelector(".side-bottom");
+  if (sideBottom && !document.querySelector(".app-version")) {
+    const tag = document.createElement("div");
+    tag.className = "app-version";
+    tag.textContent = `เวอร์ชัน ${APP_VERSION}`;
+    tag.title = "เลขนี้เปลี่ยนทุกครั้งที่มีอัปเดต — ถ้าไม่ตรงกับที่แจ้งไว้ แปลว่าเบราว์เซอร์ยังใช้ไฟล์เก่าอยู่";
+    sideBottom.appendChild(tag);
+  }
+  console.info(`ระบบวิเคราะห์ผลประเมินโครงการ — เวอร์ชัน ${APP_VERSION}`);
   refreshIcons();
 }
 
