@@ -6,7 +6,7 @@
 <title>ระบบวิเคราะห์ผลประเมินโครงการ</title>
 <meta name="description" content="วิเคราะห์ผลประเมินโครงการจากไฟล์ .xlsx (Google Forms) — ค่าเฉลี่ย S.D. ร้อยละ แผนภูมิ SDGs พร้อมรายงานราชการคัดลอกลง Word ได้ทันที ประมวลผลในเครื่อง ข้อมูลไม่ออกสู่อินเทอร์เน็ต">
 <script>/* ตั้งธีมก่อนวาดหน้า กันจอกะพริบ */try{var t=localStorage.getItem("evalTheme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
-<link rel="stylesheet" href="styles.css?v=36">
+<link rel="stylesheet" href="styles.css?v=37">
 <script src="vendor/xlsx.full.min.js" defer></script>
 <script src="vendor/chart.umd.min.js" defer></script>
 <script src="vendor/lucide.min.js" defer></script>
@@ -24,6 +24,7 @@
       <button class="side-btn tab-btn active" data-tab="dashboard"><i data-lucide="layout-dashboard"></i> แดชบอร์ด</button>
       <button class="side-btn tab-btn" data-tab="sections"><i data-lucide="chart-column"></i> ผลรายด้าน</button>
       <button class="side-btn tab-btn" data-tab="sdg"><i data-lucide="globe"></i> SDGs</button>
+      <button class="side-btn tab-btn" data-tab="executive"><i data-lucide="briefcase-business"></i> สรุปผู้บริหาร</button>
     </div>
     <div class="side-group">
       <div class="side-label">ข้อมูล</div>
@@ -103,6 +104,7 @@
     <div class="panel" id="panel-dashboard"></div>
     <div class="panel hidden" id="panel-sections"></div>
     <div class="panel hidden" id="panel-sdg"></div>
+    <div class="panel hidden" id="panel-executive"></div>
     <div class="panel hidden" id="panel-demo"></div>
     <div class="panel hidden" id="panel-text"></div>
     <div class="panel hidden" id="panel-report"></div>
@@ -129,8 +131,8 @@
 
 <div id="toast"></div>
 
-<script src="analysis.js?v=36" defer></script>
-<script src="storage.js?v=36" defer></script>
-<script src="app.js?v=36" defer></script>
+<script src="analysis.js?v=37" defer></script>
+<script src="storage.js?v=37" defer></script>
+<script src="app.js?v=39" defer></script>
 </body>
 </html>

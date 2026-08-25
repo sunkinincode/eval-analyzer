@@ -607,6 +607,45 @@ td.sample-vals { color: var(--muted); font-size: 12px; text-align: left; max-wid
 .report-block .blk-copy { position: absolute; top: -4px; right: -8px; z-index: 5; opacity: 0; transition: opacity 0.12s; font-family: "Anuphan", system-ui, sans-serif !important; }
 .report-block:hover .blk-copy { opacity: 1; }
 
+/* ---------- สรุปผู้บริหาร 1 หน้า ---------- */
+.executive-page { max-width: 980px; margin: 0 auto; }
+.exec-toolbar { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 14px; }
+.exec-toolbar b { display: block; font-size: 16px; }
+.exec-toolbar span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.exec-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.exec-paper {
+  max-width: 860px; margin: 0 auto; padding: 34px 38px; border-radius: 8px; background: #fff; color: #102233;
+  box-shadow: 0 10px 40px -12px rgba(0, 23, 55, .35); font-family: "Anuphan", "Sarabun", sans-serif;
+}
+.exec-paper * { box-sizing: border-box; }
+.exec-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; border-bottom: 3px solid #147d8c; padding-bottom: 12px; }
+.exec-kicker { display: block; color: #147d8c; font-size: 10px; font-weight: 800; letter-spacing: .075em; }
+.exec-head h1 { margin: 5px 0; font-size: 25px; line-height: 1.25; letter-spacing: -.025em; }
+.exec-meta { margin: 0; color: #5d6974; font-size: 12px; }
+.exec-level { flex-shrink: 0; padding-top: 8px; }
+.exec-score { display: grid; grid-template-columns: 1.25fr repeat(3, 1fr); gap: 9px; margin: 15px 0; }
+.exec-kpi { min-height: 92px; padding: 12px; border: 1px solid #d9e4e7; border-radius: 10px; }
+.exec-kpi b { display: block; color: #147d8c; font-size: 22px; line-height: 1.05; }
+.exec-kpi small { font-size: 12px; font-weight: 600; }
+.exec-kpi span { display: block; margin-top: 7px; color: #60727b; font-size: 10px; line-height: 1.35; }
+.exec-kpi.main { background: #147d8c; border-color: #147d8c; }
+.exec-kpi.main b, .exec-kpi.main span { color: #fff; }
+.exec-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 18px; }
+.exec-section { border-top: 1px solid #d9e4e7; margin-top: 13px; padding-top: 10px; }
+.exec-section h2 { margin: 0 0 7px; font-size: 13px; }
+.exec-section p { margin: 0 0 7px; font-size: 12px; line-height: 1.55; }
+.exec-paper table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.exec-paper th, .exec-paper td { padding: 6px; border-bottom: 1px solid #e5edef; text-align: left; vertical-align: top; }
+.exec-paper th { color: #60727b; font-size: 10px; font-weight: 700; }
+.exec-paper .num { text-align: right; white-space: nowrap; }
+.exec-note { padding: 9px 11px; border-left: 3px solid #147d8c; border-radius: 0 7px 7px 0; background: #f1f8f8; }
+.exec-footer { margin-top: 13px; padding-top: 8px; border-top: 1px solid #d9e4e7; color: #70818a; font-size: 10px; }
+@media (max-width: 720px) {
+  .exec-toolbar, .exec-head { align-items: flex-start; flex-direction: column; }
+  .exec-score, .exec-grid { grid-template-columns: 1fr 1fr; }
+  .exec-paper { padding: 24px 18px; }
+}
+
 /* ============================================================
    Toast + ไอคอน + print
    ============================================================ */

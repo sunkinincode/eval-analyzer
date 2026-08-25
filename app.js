@@ -1205,18 +1205,46 @@ function shortLabel(s, maxPx = LABEL_PX) {
   return s.slice(0, lo) + "…";
 }
 
-/** งบพิกเซลของป้ายแกน Y แปรตามความกว้างกราฟจริง — จอกว้างป้ายยาวขึ้น ไม่โดนตัดสั้นเกินจำเป็น */
-function dynLabelPx(chart) {
-  const w = chart?.width || 700;
-  return Math.max(LABEL_PX, Math.min(w * 0.4, 360));
+/* Chart.js คำนวณพื้นที่ tick ใหม่เมื่อ export เป็น canvas ทำให้ชื่อแกน Y บางครั้งถูก clip
+   จึงกันพื้นที่ป้ายเองและวาดป้ายหลังวาดกราฟ: เหมือนกันทั้งบนหน้าเว็บและรูปที่ลง Word */
+const HORIZONTAL_LABEL_SPACE = 260;
+
+/** พื้นที่ป้ายแกน Y ตามความกว้างกราฟจริง — กราฟแคบ (มือถือ/การ์ดเล็ก) ต้องไม่ถูกป้ายกินจนแท่งลีบ
+    กราฟกว้าง (รูปที่ลงเอกสาร 860px) ได้พื้นที่เต็มเพดานเท่าเดิม */
+function yLabelSpace(chart) {
+  return Math.round(Math.min(HORIZONTAL_LABEL_SPACE, Math.max(110, (chart?.width || 700) * 0.34)));
 }
 
-/** บังคับความกว้างขั้นต่ำของแกน Y ให้ครอบคลุมงบป้าย — กันการวัดที่คลาดของบางเครื่อง */
-function yAxisFloor(scale) {
-  if (scale.axis === "y") {
-    scale.width = Math.max(scale.width, Math.min(scale.chart.width * 0.5, dynLabelPx(scale.chart) + 24));
-  }
-}
+const yLabelPlugin = {
+  id: "yLabel",
+  beforeLayout(chart, _args, opts) {
+    if (!opts?.labels?.length) return;
+    const padding = chart.options.layout.padding;
+    if (padding && typeof padding === "object") padding.left = yLabelSpace(chart);
+  },
+  afterDraw(chart, _args, opts) {
+    if (!opts?.labels?.length) return;
+    const scale = chart.scales.y;
+    const area = chart.chartArea;
+    if (!scale || !area) return;
+    const { ctx } = chart;
+    const x = area.left - 12;
+    const maxWidth = Math.max(120, area.left - 26);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, area.top, Math.max(0, area.left - 8), area.bottom - area.top);
+    ctx.clip();
+    ctx.fillStyle = opts.color;
+    ctx.font = `11.5px ${FONT_STACK}`;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    opts.labels.forEach((label, index) => {
+      const y = scale.getPixelForValue(index);
+      if (Number.isFinite(y)) ctx.fillText(shortLabel(label, maxWidth), x, y);
+    });
+    ctx.restore();
+  },
+};
 
 /** plugin: เขียนตัวเลขที่ปลายแท่ง (แนวนอน) */
 const endLabelPlugin = {
@@ -1283,7 +1311,7 @@ function cfgMeanBar(labels, means, t, title, opts = {}) {
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { right: 52, top: opts.passLine ? 16 : 0 } },
+      layout: { padding: { left: HORIZONTAL_LABEL_SPACE, right: 52, top: opts.passLine ? 16 : 0 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1295,13 +1323,14 @@ function cfgMeanBar(labels, means, t, title, opts = {}) {
         },
         endLabel: { color: t.text, labels: means.map(f2) },
         passLine: opts.passLine ? { x: opts.passLine, label: opts.passLabel || "", color: "#c2410c" } : false,
+        yLabel: { color: t.secondary, labels },
       },
       scales: {
         x: { min: 0, max: 5, grid: { color: t.grid }, border: { color: t.axis }, ticks: { stepSize: 1, color: t.muted, font: { family: FONT_STACK, size: 11 } } },
-        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
+        y: { grid: { display: false }, border: { color: t.axis }, ticks: { display: false } },
       },
     },
-    plugins: [endLabelPlugin, passLinePlugin],
+    plugins: [endLabelPlugin, passLinePlugin, yLabelPlugin],
   };
 }
 
@@ -1366,6 +1395,7 @@ function cfgLikert(items, t, title) {
     data: { labels: items.map((it) => it.label), datasets },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
+      layout: { padding: { left: HORIZONTAL_LABEL_SPACE } },
       plugins: {
         legend: { position: "bottom", labels: { color: t.secondary, boxWidth: 12, boxHeight: 12, font: { family: FONT_STACK, size: 11.5 } } },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1375,12 +1405,14 @@ function cfgLikert(items, t, title) {
             label: (c) => ` ${c.dataset.label}: ${c.dataset._counts[c.dataIndex]} คน (${c.parsed.x.toFixed(1)}%)`,
           },
         },
+        yLabel: { color: t.secondary, labels: items.map((it) => it.label) },
       },
       scales: {
         x: { stacked: true, min: 0, max: 100, grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, callback: (v) => v + "%", font: { family: FONT_STACK, size: 11 } } },
-        y: { stacked: true, afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
+        y: { stacked: true, grid: { display: false }, border: { color: t.axis }, ticks: { display: false } },
       },
     },
+    plugins: [yLabelPlugin],
   };
 }
 
@@ -1397,7 +1429,7 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { right: 88 } },
+      layout: { padding: { left: HORIZONTAL_LABEL_SPACE, right: 88 } },
       plugins: {
         legend: { display: false },
         title: title ? { display: true, text: title, color: t.text, font: { family: FONT_STACK, size: 13, weight: "600" } } : { display: false },
@@ -1412,13 +1444,14 @@ function cfgCountBar(labels, values, t, { max = null, suffix = "", endLabels = n
           },
         },
         endLabel: { color: t.text, labels: endLabels },
+        yLabel: { color: t.secondary, labels },
       },
       scales: {
         x: { min: 0, ...(max ? { max } : {}), grid: { color: t.grid }, border: { color: t.axis }, ticks: { color: t.muted, font: { family: FONT_STACK, size: 11 }, precision: 0, callback: (v) => v + suffix } },
-        y: { afterFit: yAxisFloor, grid: { display: false }, border: { color: t.axis }, ticks: { color: t.secondary, font: { family: FONT_STACK, size: 11.5 }, autoSkip: false, callback(v) { return shortLabel(this.getLabelForValue(v), dynLabelPx(this.chart)); } } },
+        y: { grid: { display: false }, border: { color: t.axis }, ticks: { display: false } },
       },
     },
-    plugins: [endLabelPlugin],
+    plugins: [endLabelPlugin, yLabelPlugin],
   };
 }
 
@@ -1532,7 +1565,7 @@ function renderActiveTab() {
   const render = {
     dashboard: renderDashboard, sections: renderSections, sdg: renderSdg,
     demo: renderDemographics, text: renderTexts, columns: renderColumns,
-    health: renderHealth, report: renderReport, history: renderHistory, guide: renderGuide,
+    health: renderHealth, executive: renderExecutive, report: renderReport, history: renderHistory, guide: renderGuide,
   }[state.activeTab];
   render(panel, rows);
   panel.classList.remove("anim-page");
@@ -1682,6 +1715,85 @@ function renderDashboard(panel, rows) {
         ${bottom.map((it) => `<tr><td class="item">${esc(it.label)}</td><td class="num"><b style="color:var(--lk1)">${f2(it.stats.mean)}</b> ${levelChip(it.stats.mean)}</td></tr>`).join("")}
       </table></div>`);
   }
+}
+
+/* ============================================================
+   สรุปผู้บริหาร 1 หน้า — ใช้ตัดสินใจ/ส่งต่อก่อนอ่านรายงานฉบับเต็ม
+   ============================================================ */
+function printExecutiveSummary(summaryHtml, title) {
+  const popup = window.open("", "_blank", "width=920,height=900");
+  if (!popup) { toast("เปิดหน้าพิมพ์ไม่ได้ — อนุญาต pop-up ของเว็บนี้ก่อน"); return; }
+  popup.opener = null;
+  popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <style>
+      @page { size: A4; margin: 12mm; } body { margin:0; color:#102233; font-family:Arial,'Noto Sans Thai',sans-serif; }
+      .exec-paper { max-width: 186mm; margin:0 auto; } .exec-head { border-bottom:3px solid #147d8c; padding-bottom:9px; }
+      .exec-kicker { color:#147d8c; font-weight:700; font-size:10pt; letter-spacing:.05em; } h1 { font-size:20pt; margin:4px 0; } .exec-meta { color:#5d6974; font-size:9.5pt; }
+      .exec-score { display:grid; grid-template-columns:1.25fr repeat(3,1fr); gap:8px; margin:12px 0; }
+      .exec-kpi { border:1px solid #d8e1e5; border-radius:8px; padding:9px; } .exec-kpi b { display:block; font-size:17pt; color:#147d8c; } .exec-kpi span { font-size:8.5pt; color:#5d6974; }
+      .exec-kpi.main { background:#147d8c; border-color:#147d8c; } .exec-kpi.main b,.exec-kpi.main span { color:#fff; }
+      .exec-grid { display:grid; grid-template-columns:1.1fr .9fr; gap:12px; } .exec-section { border-top:1px solid #d8e1e5; padding-top:8px; margin-top:9px; }
+      h2 { font-size:11pt; margin:0 0 6px; color:#102233; } p { font-size:9.5pt; line-height:1.52; margin:0 0 5px; }
+      table { width:100%; border-collapse:collapse; font-size:9pt; } th,td { padding:5px 6px; border-bottom:1px solid #e4eaed; text-align:left; } th { color:#5d6974; font-size:8pt; } td.num { text-align:right; }
+      .exec-note { background:#f2f8f8; border-left:3px solid #147d8c; padding:8px 10px; border-radius:0 6px 6px 0; }
+      .exec-footer { margin-top:10px; color:#73808a; font-size:8pt; border-top:1px solid #d8e1e5; padding-top:6px; }
+    </style></head><body>${summaryHtml}<script>onload=()=>{print();}</script></body></html>`);
+  popup.document.close();
+}
+
+function renderExecutive(panel, rows) {
+  const { groups, overall, sdgs } = computeAnalysis();
+  const sortedGroups = [...groups].sort((a, b) => b.total.mean - a.total.mean);
+  const topGroup = sortedGroups[0];
+  const lowGroup = sortedGroups.at(-1);
+  const allItems = groups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.name })))
+    .filter((item) => item.stats.n > 0).sort((a, b) => a.stats.mean - b.stats.mean);
+  const lowestItem = allItems[0];
+  const commentThemes = codeComments(rows, state.columns).improve.filter((theme) => theme.key !== "other");
+  const keyTheme = commentThemes[0];
+  const target = passMark();
+  const project = state.projectName.trim() || state.fileName.replace(/\.(xlsx|xls|csv).*$/i, "") || "โครงการ";
+  const responseRate = state.respTarget ? (rows.length / state.respTarget) * 100 : null;
+  const passingSdgs = sdgs.filter((sdg) => sdg.pct >= 50);
+  const filteredNote = activeFilterText() ? ` · เฉพาะกลุ่ม ${activeFilterText()}` : "";
+  const recommendation = keyTheme
+    ? `ให้จัดลำดับพัฒนาเรื่อง “${keyTheme.name}” ซึ่งพบในความคิดเห็น ${keyTheme.count} รายการ โดย ${keyTheme.fix || "กำหนดผู้รับผิดชอบและแผนติดตามผลก่อนจัดโครงการครั้งถัดไป"}`
+    : lowGroup
+      ? `ให้ทบทวนด้าน “${lowGroup.name}” ซึ่งมีค่าเฉลี่ยต่ำสุด (x̄ ${f2(lowGroup.total.mean)}) และกำหนดผู้รับผิดชอบพร้อมตัวชี้วัดติดตามในครั้งถัดไป`
+      : "ควรรวบรวมข้อมูลแบบประเมินเพิ่มเติมเพื่อระบุจุดที่ควรพัฒนาได้ชัดเจนขึ้น";
+
+  const shell = document.createElement("div");
+  shell.className = "executive-page";
+  shell.innerHTML = `<div class="exec-toolbar">
+      <div><b>สรุปผู้บริหาร 1 หน้า</b><span>สำหรับประชุม สรุปผล หรือส่งต่อผู้เกี่ยวข้อง</span></div>
+      <div class="exec-actions"><button class="btn small" id="execCopy"><i data-lucide="copy"></i> คัดลอก</button><button class="btn small primary" id="execPrint"><i data-lucide="file-down"></i> บันทึก PDF</button></div>
+    </div>
+    <article class="exec-paper" id="executiveSummary">
+      <header class="exec-head"><div><span class="exec-kicker">PROJECT EVALUATION · EXECUTIVE SUMMARY</span><h1>${esc(project)}</h1><p class="exec-meta">สรุปจากผู้ตอบ ${rows.length} คน${responseRate != null ? ` · อัตราตอบกลับ ${responseRate.toFixed(1)}%` : ""}${filteredNote}</p></div><div class="exec-level">${overall.n ? levelChip(overall.mean) : "—"}</div></header>
+      <section class="exec-score">
+        <div class="exec-kpi main"><b>${f2(overall.mean)}<small>/5</small></b><span>ผลประเมินโดยรวม · S.D. ${f2(overall.sd)}</span></div>
+        <div class="exec-kpi"><b>${topGroup ? f2(topGroup.total.mean) : "—"}</b><span>จุดเด่น: ${esc((topGroup?.name || "ยังไม่มีข้อมูล").slice(0, 45))}</span></div>
+        <div class="exec-kpi"><b>${lowGroup ? f2(lowGroup.total.mean) : "—"}</b><span>ประเด็นพัฒนา: ${esc((lowGroup?.name || "ยังไม่มีข้อมูล").slice(0, 42))}</span></div>
+        <div class="exec-kpi"><b>${sdgs.length ? `${passingSdgs.length}/${sdgs.length}` : "—"}</b><span>เป้าหมาย SDGs ที่ผู้ตอบเห็นว่าสอดคล้อง</span></div>
+      </section>
+      <div class="exec-grid">
+        <section class="exec-section"><h2>ผลตามด้านการประเมิน</h2>
+          ${sortedGroups.length ? `<table><tr><th>ด้าน</th><th class="num">x̄</th><th>ผลเทียบเกณฑ์ ${target.toFixed(2)}</th></tr>${sortedGroups.slice(0, 6).map((group) => `<tr><td>${esc(group.name)}</td><td class="num"><b>${f2(group.total.mean)}</b></td><td>${group.total.mean >= target ? "ผ่าน" : "ควรเร่งพัฒนา"}</td></tr>`).join("")}</table>` : `<p>ยังไม่มีคำถามคะแนน 1–5 สำหรับสรุปผล</p>`}
+        </section>
+        <section class="exec-section"><h2>ข้อค้นพบสำคัญ</h2>
+          <p><b>ภาพรวม:</b> ${overall.n ? `ผลประเมินอยู่ในระดับ${levelLabel(overall.mean)} และ${overall.mean >= target ? "ผ่าน" : "ยังไม่ผ่าน"}เกณฑ์ความสำเร็จที่กำหนด` : "ยังไม่มีข้อมูลคะแนนเพียงพอ"}</p>
+          ${lowestItem ? `<p><b>ข้อที่ควรติดตาม:</b> ${esc(lowestItem.label)} (${esc(lowestItem.group)}) มีค่าเฉลี่ย ${f2(lowestItem.stats.mean)}</p>` : ""}
+          ${sdgs.length ? `<p><b>SDGs:</b> ผู้ตอบเห็นว่าสอดคล้อง ${passingSdgs.length} จาก ${sdgs.length} เป้าหมาย${passingSdgs.length ? ` ได้แก่ ${esc(passingSdgs.slice(0, 4).map((sdg) => sdg.short).join(", "))}` : ""}</p>` : ""}
+          ${keyTheme ? `<p><b>เสียงสะท้อนที่พบบ่อย:</b> ${esc(keyTheme.name)} (${keyTheme.count} รายการ)</p>` : ""}
+        </section>
+      </div>
+      <section class="exec-section"><h2>ข้อเสนอเพื่อการตัดสินใจครั้งถัดไป</h2><p class="exec-note">${esc(recommendation)}</p></section>
+      <footer class="exec-footer">จัดทำจากระบบวิเคราะห์ผลประเมินโครงการ · ข้อมูลประมวลผลในเครื่อง · ${new Date().toLocaleDateString("th-TH")}</footer>
+    </article>`;
+  panel.appendChild(shell);
+  const summary = $("#executiveSummary", shell);
+  $("#execCopy", shell).onclick = () => copyHtmlToClipboard(summary.outerHTML);
+  $("#execPrint", shell).onclick = () => printExecutiveSummary(summary.outerHTML, `สรุปผู้บริหาร-${project}`);
 }
 
 function cardEl(parent, title, sub, icon) {
@@ -3293,7 +3405,9 @@ function datasetBlocks(ds, num, rk) {
     }
 
     // กราฟที่ 1 ของเล่ม: ค่าเฉลี่ยรายด้านของฐานหลักทั้งหมด (ห้ามรวมข้อมูลต่างฐานในกราฟเดียว)
-    if (state.reportOpts.charts && b.kind === "main" && b.list.length > 1 && num.mainCharts < 1) {
+    // กราฟเปรียบเทียบรายด้านไปอยู่กับฐานแรกที่มีตั้งแต่ 2 ด้าน (บางแบบประเมินฐานใหญ่มีด้านเดียว
+    // ซึ่งกราฟไม่มีอะไรให้เทียบ) — ยังคงกฎเดิม: หนึ่งกราฟใช้ข้อมูลฐานเดียว ไม่ปนข้ามฐาน
+    if (state.reportOpts.charts && b.list.length > 1 && num.mainCharts < 1) {
       num.mainCharts++;
       num.chart++;
       const sortedAll = [...b.list].sort((x, y) => y.g.total.mean - x.g.total.mean);
