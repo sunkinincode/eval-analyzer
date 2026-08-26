@@ -110,7 +110,7 @@ const state = {
   mapConfirmed: false,       // ผู้ใช้ยืนยันการจำแนกชนิดคำถามแล้วหรือยัง
   fuzzyDismissed: [],        // คู่ค่าที่ผู้ใช้ยืนยันว่า "คนละค่า" — ไม่ต้องเตือนซ้ำ
   ackIssues: [],             // รายการตรวจข้อมูลที่ผู้ใช้กด "รับทราบ" — ไม่หักคะแนนความพร้อม
-  _preClean: null,           // สำเนาแถวก่อนตัดแถวซ้ำ — ปุ่ม "เลิกทำ"
+  cutBatches: [],            // แถวที่ถูกตัดออกแต่ละครั้ง [{i,r}] — บันทึกไว้เพื่อกด "เลิกทำ" ได้แม้ปิดเว็บไปแล้ว
   dedupKeep: "first",        // คนเดิมส่งซ้ำ: เก็บรายการแรก | last = เก็บรายการล่าสุด (ฉบับแก้ไข)
 };
 
@@ -336,7 +336,7 @@ async function saveSessionSnapshot() {
       reportOpts: { ...state.reportOpts },
       roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
       mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
-      ackIssues: state.ackIssues,
+      ackIssues: state.ackIssues, cutBatches: state.cutBatches,
     });
   } catch (e) { console.warn("บันทึกประวัติไม่สำเร็จ", e); }
 }
@@ -572,7 +572,7 @@ function ingestAoA(aoa, opts = {}) {
     state.roleMap = {}; state.valueMap = {}; state.cleanLog = [];
     state.mapConfirmed = false; state.fuzzyDismissed = []; state.ackIssues = [];
   }
-  state._preClean = null;
+  state.cutBatches = [];
   bumpDataVersion();
 
   $$(".panel").forEach((p) => (p.innerHTML = ""));
@@ -776,7 +776,7 @@ function exportProject(withReview) {
     headers: state.headers, rows: state.rows, colTypes: currentColTypes(),
     roleMap: state.roleMap, valueMap: state.valueMap, cleanLog: state.cleanLog,
     mapConfirmed: state.mapConfirmed, fuzzyDismissed: state.fuzzyDismissed,
-    ackIssues: state.ackIssues, reportOpts: { ...state.reportOpts },
+    ackIssues: state.ackIssues, cutBatches: state.cutBatches, reportOpts: { ...state.reportOpts },
     review: withReview ? state.review : null,
   };
   const base = (state.projectName.trim() || state.fileName.replace(/\.[^.]+$/, "") || "โครงการ");
@@ -876,7 +876,7 @@ function importProject(obj, srcName) {
   state.mapConfirmed = !!obj.mapConfirmed;
   state.fuzzyDismissed = obj.fuzzyDismissed || [];
   state.ackIssues = obj.ackIssues || [];
-  state._preClean = null;
+  state.cutBatches = obj.cutBatches || [];
   if (obj.reportOpts) state.reportOpts = { ...state.reportOpts, ...obj.reportOpts };
   updateStatusCol();
   state.filterSel = {};
@@ -2656,7 +2656,7 @@ function renderHealth(panel) {
   }
 
   // แถวซ้ำ — dialog แสดงผลกระทบก่อนตัด + เลิกทำได้
-  if (h.dupRowIdx.length || h.sameAnsDiffId.length || state.cleanLog.some((x) => x.t === "dedup")) {
+  if (h.dupRowIdx.length || h.sameAnsDiffId.length || state.cleanLog.some((x) => x.t === "dedup") || (state.cutBatches || []).length) {
     const c2 = cardEl(panel, "การส่งซ้ำของผู้ตอบ",
       h.idCols.length
         ? `ระบบชี้ขาดด้วย "${h.idCols.join(" / ")}" — คนละรหัสถือเป็นคนละคนเสมอ แม้ตอบเหมือนกันทุกข้อ`
@@ -2712,7 +2712,9 @@ function renderHealth(panel) {
           buttons: [
             { label: "ไว้ภายหลัง", onClick: null },
             { label: `<i data-lucide="eraser"></i> ตัดแถวซ้ำ ${del.size} แถว`, cls: "primary", onClick: () => {
-              if (!state._preClean) state._preClean = state.rows.slice();
+              // เก็บเฉพาะแถวที่ตัดพร้อมตำแหน่งเดิม — ใส่กลับที่เดิมได้ และไม่กินที่เก็บเหมือนสำเนาทั้งชุด
+              const removed = [...del].sort((a, b) => a - b).map((i) => ({ i, r: state.rows[i] }));
+              state.cutBatches = [...(state.cutBatches || []), removed];
               state.rows = afterRows;
               state.cleanLog.push({ t: "dedup", n: del.size, keep: state.dedupKeep, byId: !!h.idCols.length, at: Date.now() });
               bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
@@ -2733,14 +2735,19 @@ function renderHealth(panel) {
     state.cleanLog.filter((x) => x.t === "dedup").forEach((x) => {
       c2.insertAdjacentHTML("beforeend", `<p class="hl-issue hl-info"><i data-lucide="scissors"></i> ตัดแถวซ้ำไปแล้ว ${x.n} แถว (${new Date(x.at).toLocaleString("th-TH")})</p>`);
     });
-    if (state._preClean) {
-      c2.insertAdjacentHTML("beforeend", `<button class="btn small" id="btnUndoDedup"><i data-lucide="undo-2"></i> เลิกทำการตัดทั้งหมด (คืน ${state._preClean.length} แถว)</button>`);
+    const cutCount = (state.cutBatches || []).reduce((a, b) => a + b.length, 0);
+    if (cutCount) {
+      c2.insertAdjacentHTML("beforeend", `<button class="btn small" id="btnUndoDedup"><i data-lucide="undo-2"></i> เลิกทำการตัด — คืนแถวที่ตัดไป ${cutCount} แถว</button>`);
       $("#btnUndoDedup", c2).onclick = () => {
-        state.rows = state._preClean;
-        state._preClean = null;
+        const rows = state.rows.slice();
+        for (let b = state.cutBatches.length - 1; b >= 0; b--) {
+          for (const { i, r } of state.cutBatches[b]) rows.splice(Math.min(i, rows.length), 0, r);
+        }
+        state.rows = rows;
+        state.cutBatches = [];
         state.cleanLog = state.cleanLog.filter((x) => x.t !== "dedup");
         bumpDataVersion(); saveSessionSnapshot(); renderActiveTab();
-        toast("คืนแถวที่ตัดทั้งหมดแล้ว");
+        toast(`คืนแถวที่ตัดไปแล้ว ${cutCount} แถว — ข้อมูลกลับมาครบ`);
       };
     }
   }
@@ -4057,7 +4064,7 @@ async function openSession(id) {
   state.mapConfirmed = !!s.mapConfirmed;
   state.fuzzyDismissed = s.fuzzyDismissed || [];
   state.ackIssues = s.ackIssues || [];
-  state._preClean = null;
+  state.cutBatches = s.cutBatches || [];
   state.reportExtraIds = new Set();
   bumpDataVersion();
 
